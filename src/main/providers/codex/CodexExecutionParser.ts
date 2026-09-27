@@ -138,8 +138,13 @@ export class CodexExecutionParser {
         const id = str(item.id);
         // Hosted search: the WebSearch item is persisted one record before its
         // call (25/25 real cases), so the call may find its item already known.
+        // Only a top-level WebSearch item that no call has claimed is adopted.
         const prior = id ? this.byItemId.get(id) : undefined;
-        if (prior && prior.evidence.observed?.kind !== 'call') {
+        if (
+          prior?.kind === 'web_search' &&
+          prior.parentId === undefined &&
+          prior.evidence.observed?.kind === 'item'
+        ) {
           this.adoptWebSearchCall(prior, record, item, id);
           return undefined;
         }
@@ -530,14 +535,15 @@ export class CodexExecutionParser {
     item: Record<string, unknown>,
     id: string | undefined
   ): void {
-    const action = isRecord(item.action) ? item.action : {};
     draft.evidence.observed = recordEvidence('call', 'web_search_call', record, id);
     draft.evidence.cellLink = {
       method: 'explicit_id',
       detail: 'Item recorded one record before its call; linked by web_search_call.id',
     };
-    draft.args = action;
-    draft.command ??= describeWebSearchAction(action);
+    if (isRecord(item.action)) {
+      draft.args = item.action;
+      draft.command ??= describeWebSearchAction(item.action);
+    }
     draft.turnId ??= passthroughTurnId(item);
     if (mapHostedStatus(str(item.status)) === 'failed') {
       draft.status = 'failed';

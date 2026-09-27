@@ -177,4 +177,91 @@ describe('Codex scanning and session details', () => {
     expect(second.timeline[second.timeline.length - 1].lineNumber).toBe(22);
     service.dispose();
   });
+
+  it('does not guess a subagent inherited count or title the head read could not reach', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-home-'));
+    tempDirs.push(home);
+    const sessionsDir = path.join(home, 'sessions');
+    const thread = '01a0b000-0000-7000-8000-000000000001';
+    const sessionId = `2026/09/26/rollout-2026-09-26T10-00-00-${thread}.jsonl`;
+    const parentTurn = '01a0a000-0000-7000-8000-000000000002';
+    const ownTurn = '01a0b000-0001-7000-8000-000000000003';
+    // A copied parent history longer than the 400-line head read.
+    const prefix = 450;
+    const records: Record<string, unknown>[] = [
+      {
+        ordinal: 0,
+        type: 'session_meta',
+        payload: {
+          id: thread,
+          cwd: '/work',
+          source: { subagent: { thread_spawn: { parent_thread_id: parentTurn } } },
+          subagent_history_start_ordinal: prefix + 1,
+        },
+      },
+      ...Array.from({ length: prefix }, (_, index) => ({
+        ordinal: index + 1,
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: `parent request ${index}` }],
+          internal_chat_message_metadata_passthrough: { turn_id: parentTurn },
+        },
+      })),
+      {
+        ordinal: prefix + 1,
+        type: 'event_msg',
+        payload: { type: 'task_started', turn_id: ownTurn },
+      },
+      {
+        ordinal: prefix + 2,
+        type: 'turn_context',
+        payload: { turn_id: ownTurn, model: 'gpt-test', cwd: '/work' },
+      },
+      {
+        ordinal: prefix + 3,
+        type: 'inter_agent_communication_metadata',
+        payload: { trigger_turn: true },
+      },
+      {
+        ordinal: prefix + 4,
+        type: 'response_item',
+        payload: {
+          type: 'agent_message',
+          author: '/root',
+          recipient: '/root/long_prefix_task',
+          content: [
+            {
+              type: 'input_text',
+              text: 'Message Type: NEW_TASK\nTask name: /root/long_prefix_task',
+            },
+            { type: 'encrypted_content', encrypted_content: 'gAAAA' },
+          ],
+        },
+      },
+    ];
+    const filePath = path.join(sessionsDir, ...sessionId.split('/'));
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      `${records.map((record) => JSON.stringify({ timestamp: '2026-09-26T10:00:00.000Z', ...record })).join('\n')}\n`
+    );
+
+    const list = await new CodexScanner(sessionsDir).scan();
+    // The head read ends inside the copied history: no count, and the parent's
+    // requests are never used as the title.
+    expect(list.sessions[0].inheritedRecordCount).toBeUndefined();
+    expect(list.sessions[0].title).toBeUndefined();
+
+    const service = new CodexSessionService({ sessionsDir, watch: false });
+    const detail = (await service.getSessionDetail(sessionId)) as AgentSessionDetail;
+    expect(detail.session).toMatchObject({
+      inheritedRecordCount: prefix,
+      title: 'long_prefix_task',
+      titleSource: 'agent_task',
+      model: 'gpt-test',
+    });
+    service.dispose();
+  });
 });

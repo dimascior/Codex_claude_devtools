@@ -120,7 +120,9 @@ export interface ExecutionEvidence {
   result?: RecordEvidence;
   /**
    * Nested item records: how the item was attributed to its code cell.
-   * Top-level item records: why no call or cell could be linked (`unresolved`).
+   * Top-level item records: how the item was linked to a call recorded after it
+   * (`explicit_id`, e.g. a hosted search item persisted before its call), or
+   * why no call or cell could be linked (`unresolved`).
    */
   cellLink?: EvidenceLink;
   /** How a recorded item was matched to a call site (script or inventory entry) */

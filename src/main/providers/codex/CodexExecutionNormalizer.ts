@@ -10,6 +10,7 @@
  * |----------------|-----------------------------------------|-----------------------------------|
  * | User message   | `user_message` / `UserMessage` events   | `message` items with role `user`  |
  * | Agent message  | `message` items with role `assistant`   | `agent_message` events            |
+ * | Inter-agent    | `agent_message` items                   | —                                 |
  * | Reasoning      | `reasoning` items                       | `agent_reasoning` events          |
  * | Executions     | tool call items + outputs, item records | —                                 |
  *
@@ -17,9 +18,11 @@
  * is reported as unavailable and never decoded.
  *
  * Subagent rollouts start with records copied from the parent thread
- * (`session_meta.subagent_history_start_ordinal`). Those are the parent's
- * history, so they are summarized by one `inherited_context` entry instead of
- * being rendered as the subagent's own activity.
+ * (`session_meta.subagent_history_start_ordinal`, see `InheritedHistoryTracker`).
+ * Those are the parent's history, so they are summarized by one
+ * `inherited_context` entry instead of being rendered as the subagent's own
+ * activity. A subagent's own history has no user message; its title is its
+ * task name (see `SubagentTaskNameFinder`).
  */
 
 import { hasRecordedResult, isStaticOnly } from '@shared/utils/executionEvidence';
@@ -31,6 +34,7 @@ import {
   InheritedHistoryTracker,
   isInjectedContext,
   parseSessionMeta,
+  SubagentTaskNameFinder,
   toPreview,
 } from './CodexMetadataParser';
 
@@ -43,6 +47,7 @@ import type {
   ExecutionStats,
   InheritedContextEntry,
   ReasoningEntry,
+  SessionTitleSource,
   TimelineEntry,
   UserMessageEntry,
 } from '@main/domain';
@@ -55,8 +60,11 @@ export interface NormalizeOptions {
 export interface NormalizedCodexSession {
   metadata: CodexSessionMetadata;
   model?: string;
-  /** First user request, as a preview */
+  /** First user request as a preview, else a subagent's task name */
   title?: string;
+  titleSource?: SessionTitleSource;
+  /** Records skipped as inherited parent history (subagents only) */
+  inheritedRecordCount?: number;
   timeline: TimelineEntry[];
   executions: Execution[];
   stats: ExecutionStats;
@@ -106,12 +114,15 @@ export function normalizeCodexRollout(
   let lastReasoningEventLine = -1;
   let inherited: InheritedContextEntry | undefined;
   const inheritedTracker = new InheritedHistoryTracker();
+  const taskNameFinder = new SubagentTaskNameFinder();
 
   const entries: TimelineEntry[] = [];
   const eventUserMessages: UserMessageEntry[] = [];
   const itemUserMessages: UserMessageEntry[] = [];
   const itemAgentMessages: AgentMessageEntry[] = [];
   const eventAgentMessages: AgentMessageEntry[] = [];
+  // Messages from other agents have no event duplicate; they never replace the agent's own.
+  const interAgentMessages: AgentMessageEntry[] = [];
   const itemReasoning: ReasoningEntry[] = [];
   const eventReasoning: ReasoningEntry[] = [];
   const compactions: CompactionEntry[] = [];
@@ -154,6 +165,7 @@ export function normalizeCodexRollout(
       inherited.lastLineNumber = record.lineNumber;
       continue;
     }
+    taskNameFinder.accept(record, metadata);
 
     switch (record.type) {
       case 'session_meta':
@@ -216,14 +228,15 @@ export function normalizeCodexRollout(
           }
         } else if (type === 'agent_message') {
           const { text, encrypted } = agentMessageText(item.content);
-          itemAgentMessages.push({
+          interAgentMessages.push({
             kind: 'agent_message',
             id: `a-${record.lineNumber}`,
             ...base,
             turnId,
-            text: text || (encrypted ? '[encrypted message]' : ''),
+            text,
             author: str(item.author),
             recipient: str(item.recipient),
+            encrypted: encrypted || undefined,
           });
         } else if (type === 'reasoning') {
           const summary = contentTexts(item.summary);
@@ -396,6 +409,7 @@ export function normalizeCodexRollout(
     ...entries,
     ...userMessages,
     ...agentMessages,
+    ...interAgentMessages,
     ...reasoning,
     ...mergeCompactions(compactions),
   ];
@@ -404,11 +418,21 @@ export function normalizeCodexRollout(
 
   const executions = parser.getExecutions();
   const firstRequest = userMessages.find((message) => message.text.trim());
+  const { taskName } = taskNameFinder;
+  let titleSource: SessionTitleSource | undefined;
+  if (firstRequest) {
+    titleSource = 'user_message';
+  } else if (taskName) {
+    titleSource = 'agent_task';
+  }
 
   return {
     metadata,
     model,
-    title: firstRequest ? toPreview(firstRequest.text) : undefined,
+    title: firstRequest ? toPreview(firstRequest.text) : taskName,
+    titleSource,
+    inheritedRecordCount:
+      metadata.historyStartOrdinal !== undefined ? (inherited?.recordCount ?? 0) : undefined,
     timeline,
     executions,
     stats: computeExecutionStats(executions),

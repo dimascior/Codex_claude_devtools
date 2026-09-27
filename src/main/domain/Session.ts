@@ -6,6 +6,14 @@ import type { AgentProvider, ExecutionStats } from './Execution';
 import type { TimelineEntry } from './Message';
 
 /**
+ * Where a session title came from.
+ * - `user_message`: the first request the user typed
+ * - `agent_task`: a subagent's task name, from the inter-agent message that
+ *   assigned the task (the task text itself is stored encrypted)
+ */
+export type SessionTitleSource = 'user_message' | 'agent_task';
+
+/**
  * Lightweight description of one session file.
  */
 export interface AgentSessionSummary {
@@ -22,8 +30,10 @@ export interface AgentSessionSummary {
   projectKey: string;
   /** Display name derived from `cwd` */
   projectName: string;
-  /** First user request, for previews */
+  /** First user request (or a subagent's task name, see `titleSource`), for previews */
   title?: string;
+  /** Where `title` came from */
+  titleSource?: SessionTitleSource;
   /** ISO timestamp when the session started */
   startedAt?: string;
   /** Last write to the session file (Unix ms) */
@@ -51,7 +61,8 @@ export interface AgentSessionSummary {
   agentRole?: string;
   /**
    * Number of records copied from the parent thread when this subagent was
-   * spawned (they precede the subagent's own history in the file)
+   * spawned (they precede the subagent's own history in the file). Undefined
+   * when not known, e.g. when a listing's head read ended inside that history.
    */
   inheritedRecordCount?: number;
   /** Why metadata could not be read, if it could not */

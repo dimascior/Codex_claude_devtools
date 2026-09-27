@@ -112,12 +112,29 @@ describe('codexFormatting', () => {
     ]);
 
     const recorded = exec({
+      parentId: 'call_cell',
       evidence: { observed: item, result: item, cellLink: { method: 'turn_window' } },
     });
     expect(evidenceBadge(recorded)?.label).toBe('recorded');
     expect(describeEvidence(recorded)).toEqual([
       'Observed: item_completed/FileChange, rollout line 100',
       'Cell link: same turn, only running cell (record order)',
+    ]);
+
+    // A top-level item linked to the call recorded after it has no cell.
+    const adopted = exec({
+      kind: 'web_search',
+      evidence: {
+        observed: { kind: 'call', recordType: 'web_search_call', lineNumber: 101 },
+        result: { kind: 'item', recordType: 'item_completed/WebSearch', lineNumber: 100 },
+        cellLink: { method: 'explicit_id', detail: 'linked by web_search_call.id' },
+      },
+    });
+    expect(evidenceBadge(adopted)).toBeUndefined();
+    expect(describeEvidence(adopted)).toEqual([
+      'Observed: web_search_call, rollout line 101',
+      'Result: item_completed/WebSearch, rollout line 100',
+      'Attribution: shared identifier (linked by web_search_call.id)',
     ]);
 
     const linked = exec({

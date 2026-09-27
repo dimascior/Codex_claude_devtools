@@ -137,7 +137,13 @@ export class CodexSessionService extends EventEmitter {
     const normalized = normalizeCodexRollout(records, { active: isLive });
     const summary = buildSessionSummary(
       file,
-      { metadata: normalized.metadata, model: normalized.model, title: normalized.title },
+      {
+        metadata: normalized.metadata,
+        model: normalized.model,
+        title: normalized.title,
+        titleSource: normalized.titleSource,
+        inheritedRecordCount: normalized.inheritedRecordCount,
+      },
       isLive
     );
     summary.turnInProgress = normalized.turnInProgress;

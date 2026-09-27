@@ -76,7 +76,17 @@ const SessionRow = ({
           style={{ color: session.title ? COLOR_TEXT : COLOR_TEXT_MUTED }}
         >
           {isSubagent && <span style={{ color: COLOR_TEXT_MUTED }}>↳ </span>}
-          {session.title ?? session.error ?? '(no request recorded yet)'}
+          {session.titleSource === 'agent_task' && (
+            <span
+              style={{ color: COLOR_TEXT_MUTED }}
+              title="Task name given when the subagent was spawned; the task text is stored encrypted"
+            >
+              task{' '}
+            </span>
+          )}
+          {session.title ??
+            session.error ??
+            (isSubagent ? '(no readable task recorded)' : '(no request recorded yet)')}
         </span>
       </div>
       <div

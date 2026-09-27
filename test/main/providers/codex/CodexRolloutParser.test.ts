@@ -134,6 +134,20 @@ describe('CodexRolloutParser', () => {
     expect(result.records).toHaveLength(2);
   });
 
+  it('offers every returned record to stopWhen, including the last one before the line cap', async () => {
+    const offered: number[] = [];
+    const result = await readRolloutRecords(path.join(FIXTURES, 'function-calls.jsonl'), {
+      maxLines: 3,
+      stopWhen: (record) => {
+        offered.push(record.lineNumber);
+        return false;
+      },
+    });
+    expect(result.stoppedEarly).toBe(true);
+    expect(result.records).toHaveLength(3);
+    expect(offered).toEqual(result.records.map((record) => record.lineNumber));
+  });
+
   it('reads the tail of a rollout', async () => {
     const records = await readRolloutTail(path.join(FIXTURES, 'function-calls.jsonl'), 600);
     expect(records.length).toBeGreaterThan(0);

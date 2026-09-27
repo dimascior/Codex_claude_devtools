@@ -18,9 +18,10 @@ import { parseCodexEvent } from '../../../../src/main/providers/codex/CodexEvent
 import { normalizeCodexRollout } from '../../../../src/main/providers/codex/CodexExecutionNormalizer';
 import { parseRolloutLine } from '../../../../src/main/providers/codex/CodexRolloutParser';
 import { CodexScanner } from '../../../../src/main/providers/codex/CodexScanner';
+import { CodexSessionService } from '../../../../src/main/providers/codex/CodexSessionService';
 
 import type { CodexRolloutRecord } from '../../../../src/main/providers/codex/types';
-import type { Execution, TimelineEntry } from '@shared/types';
+import type { AgentSessionDetail, Execution, TimelineEntry } from '@shared/types';
 
 const REAL_OBSERVED = path.resolve(__dirname, '../../../../tests/fixtures/codex/real-observed');
 
@@ -62,6 +63,28 @@ function findExecution(list: Execution[], id: string): Execution {
   const found = list.find((exec) => exec.id === id);
   if (!found) throw new Error(`execution ${id} not found`);
   return found;
+}
+
+/**
+ * Write a complete transcript back as a rollout under `sessionsDir` (the
+ * transcript's records are contiguous, so line numbers are unchanged).
+ * Returns the session id.
+ */
+function writeRollout(sessionsDir: string, transcript: string, sessionId: string): string {
+  const filePath = path.join(sessionsDir, ...sessionId.split('/'));
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const lines = readTranscript(transcript)
+    .filter((entry) => typeof entry.type === 'string')
+    .map(({ line: _line, bytes: _bytes, ...record }) => JSON.stringify(record));
+  fs.writeFileSync(filePath, `${lines.join('\n')}\n`);
+  return sessionId;
+}
+
+async function sessionDetail(sessionsDir: string, sessionId: string): Promise<AgentSessionDetail> {
+  const service = new CodexSessionService({ sessionsDir, watch: false });
+  const detail = await service.getSessionDetail(sessionId);
+  if (!detail || 'unchanged' in detail) throw new Error(`no detail for ${sessionId}`);
+  return detail;
 }
 
 describe('real-observed fixtures: transcript loading', () => {
@@ -236,7 +259,7 @@ describe('real-observed fixtures: forked subagent rollout', () => {
   const records = loadRecords('subagent-thread-spawn.jsonl');
   const session = normalizeCodexRollout(records, { active: false });
 
-  it('ends the inherited prefix at the first record of the subagent\'s own history', () => {
+  it("ends the inherited prefix at the first record of the subagent's own history", () => {
     expect(session.metadata).toMatchObject({
       threadId: '01a0a8c9-2bb8-7920-a65b-c88be2bc900f',
       parentThreadId: '01a09d90-2086-7f92-9e12-670bc277cf90',
@@ -259,38 +282,52 @@ describe('real-observed fixtures: forked subagent rollout', () => {
       expect.objectContaining({ kind: 'turn_event', lineNumber: 171 }),
     ]);
     expect(session.executions).toEqual([]);
-    // The task arrives as an inter-agent message, not a user message.
-    expect(session.title).toBeUndefined();
+    expect(session.inheritedRecordCount).toBe(160);
     expect(session.model).toBe('<model-2>');
     expect(session.tokenUsage).toBeDefined();
     expect(session.turnInProgress).toBe(false);
   });
 
-  describe('session list', () => {
+  it('titles the subagent with its task name, never with an inherited prompt', () => {
+    // The task arrives as an inter-agent message (line 168) right after
+    // inter_agent_communication_metadata with trigger_turn (line 167). Its
+    // readable text is only the task header (90 characters, the length of
+    // upstream's NEW_TASK header for this author and recipient); the task
+    // itself is encrypted. The user messages in this file are the parent's.
+    expect(session.title).toBe('<task-1>');
+    expect(session.titleSource).toBe('agent_task');
+    const task = session.timeline.find((entry) => entry.kind === 'agent_message');
+    expect(task).toMatchObject({
+      author: '/root',
+      recipient: '/root/<task-1>',
+      encrypted: true,
+    });
+  });
+
+  describe('session list and detail', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-real-observed-'));
     afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
 
-    it('takes the title and model from own history only and reports the inherited count', async () => {
-      const dayDir = path.join(dir, '2026', '09', '16');
-      fs.mkdirSync(dayDir, { recursive: true });
-      const lines = readTranscript('subagent-thread-spawn.jsonl')
-        .filter((entry) => typeof entry.type === 'string')
-        .map(({ line: _line, bytes: _bytes, ...record }) => JSON.stringify(record));
-      fs.writeFileSync(
-        path.join(dayDir, 'rollout-2026-09-16T01-55-51-01a0a8c9-2bb8-7920-a65b-c88be2bc900f.jsonl'),
-        `${lines.join('\n')}\n`
+    it('agree on title, model and inherited count, all taken from own history', async () => {
+      const id = writeRollout(
+        dir,
+        'subagent-thread-spawn.jsonl',
+        '2026/09/16/rollout-2026-09-16T01-55-51-01a0a8c9-2bb8-7920-a65b-c88be2bc900f.jsonl'
       );
       const list = await new CodexScanner(dir).scan();
       expect(list.sessions).toHaveLength(1);
-      expect(list.sessions[0]).toMatchObject({
+      // Every user message in this file belongs to the parent; the subagent's
+      // own turn_context (line 166) supplies the model.
+      const expected = {
         parentThreadId: '01a09d90-2086-7f92-9e12-670bc277cf90',
         agentNickname: '<agent-1>',
         inheritedRecordCount: 160,
         model: '<model-2>',
-      });
-      // Every user message in this file belongs to the parent; the subagent's
-      // own turn_context (line 166) supplies the model.
-      expect(list.sessions[0].title).toBeUndefined();
+        title: '<task-1>',
+        titleSource: 'agent_task',
+      };
+      expect(list.sessions[0]).toMatchObject(expected);
+      expect((await sessionDetail(dir, id)).session).toMatchObject(expected);
     });
   });
 });
@@ -322,6 +359,37 @@ describe('real-observed fixtures: subagent with a correct declared boundary', ()
       expect(entry.lineNumber).toBeGreaterThanOrEqual(17);
     }
     expect(session.model).toBe('<model-1>');
+    expect(session.inheritedRecordCount).toBe(15);
+  });
+
+  it('titles the subagent with its task name, not the parent prompts it inherited', () => {
+    // Lines 10 and 15 are the parent's user messages, inside the prefix. The
+    // task message (line 23, after trigger_turn metadata on line 22) has 91
+    // readable characters: upstream's NEW_TASK header for its recipient.
+    expect(session.title).toBe('<task-1>');
+    expect(session.titleSource).toBe('agent_task');
+  });
+
+  describe('session list and detail', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-real-observed-'));
+    afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+    it('agree on title, model and inherited count', async () => {
+      const id = writeRollout(
+        dir,
+        'subagent-declared-boundary.jsonl',
+        '2026/09/10/rollout-2026-09-10T08-41-47-01a08b56-a905-7712-bb7e-f2747c374a39.jsonl'
+      );
+      const expected = {
+        inheritedRecordCount: 15,
+        model: '<model-1>',
+        title: '<task-1>',
+        titleSource: 'agent_task',
+      };
+      const list = await new CodexScanner(dir).scan();
+      expect(list.sessions[0]).toMatchObject(expected);
+      expect((await sessionDetail(dir, id)).session).toMatchObject(expected);
+    });
   });
 });
 
@@ -343,7 +411,9 @@ describe('real-observed fixtures: hosted web search', () => {
       expect(exec.status).toBe('completed');
     }
     // The pair at lines 155/156 is one execution, not two.
-    expect(list.filter((exec) => exec.lineNumber === 155 || exec.lineNumber === 156)).toHaveLength(1);
+    expect(list.filter((exec) => exec.lineNumber === 155 || exec.lineNumber === 156)).toHaveLength(
+      1
+    );
   });
 
   it('keeps calls without an id and their items apart', () => {
@@ -351,7 +421,9 @@ describe('real-observed fixtures: hosted web search', () => {
     // to the WebSearch item recorded one record earlier.
     const older = list.filter((exec) => exec.lineNumber >= 146 && exec.lineNumber <= 153);
     const calls = older.filter((exec) => exec.evidence.observed?.recordType === 'web_search_call');
-    const items = older.filter((exec) => exec.evidence.result?.recordType === 'item_completed/WebSearch');
+    const items = older.filter(
+      (exec) => exec.evidence.result?.recordType === 'item_completed/WebSearch'
+    );
     expect(calls).toHaveLength(3);
     expect(items).toHaveLength(3);
     for (const call of calls) expect(call.evidence.observed?.recordId).toBeUndefined();

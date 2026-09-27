@@ -123,13 +123,14 @@ export async function readRolloutRecords(
       return false;
     }
     records.push(record);
-    if (
-      options.maxLines !== undefined &&
-      lineNumber - (options.startLineNumber ?? 1) >= options.maxLines
-    ) {
-      return true;
-    }
-    return options.stopWhen?.(record) ?? false;
+    // Every returned record is offered to `stopWhen`, including the last one
+    // before the line cap.
+    const stop = options.stopWhen?.(record) ?? false;
+    return (
+      stop ||
+      (options.maxLines !== undefined &&
+        lineNumber - (options.startLineNumber ?? 1) >= options.maxLines)
+    );
   };
 
   const splitter = new LineSplitter((line) => {

@@ -43,7 +43,7 @@ as `codex:session-change` (IPC) and SSE events (HTTP server).
 |------|------|
 | `codexPaths.ts` | `$CODEX_HOME` resolution, session id ↔ path (ids are validated relative paths) |
 | `CodexRolloutParser.ts` | Streaming line reader (plain/zstd), envelope + legacy normalization, payload sanitization |
-| `CodexMetadataParser.ts` | `session_meta` parsing, project key/name from cwd, injected-context detection |
+| `CodexMetadataParser.ts` | `session_meta` parsing, project key/name from cwd, injected-context detection, subagent inherited-history tracking and task names |
 | `CodexEventParser.ts` | `event_msg` parsing incl. paginated `item_completed` TurnItems |
 | `CodexExecutionParser.ts` | Call/output correlation into `Execution`s (unified exec polls, code cells, patches) |
 | `codeCell.ts` | Static analysis of code-mode scripts (`tools.x({...})` calls) |

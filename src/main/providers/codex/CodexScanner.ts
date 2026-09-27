@@ -20,6 +20,7 @@ import {
   parseSessionMeta,
   projectKeyForCwd,
   projectNameForCwd,
+  SubagentTaskNameFinder,
   toPreview,
 } from './CodexMetadataParser';
 import {
@@ -32,7 +33,12 @@ import {
 import { isZstdSupported, readRolloutRecords, readRolloutTail } from './CodexRolloutParser';
 
 import type { CodexRolloutRecord } from './types';
-import type { AgentProjectGroup, AgentSessionList, AgentSessionSummary } from '@main/domain';
+import type {
+  AgentProjectGroup,
+  AgentSessionList,
+  AgentSessionSummary,
+  SessionTitleSource,
+} from '@main/domain';
 
 /** Rollouts written within this window count as live. */
 const CODEX_LIVE_WINDOW_MS = 10 * 60 * 1000;
@@ -61,7 +67,11 @@ export interface RolloutHead {
   metadata: CodexSessionMetadata;
   model?: string;
   title?: string;
-  /** Records skipped as inherited parent history (subagents only) */
+  titleSource?: SessionTitleSource;
+  /**
+   * Records skipped as inherited parent history (subagents only); undefined
+   * when the head read ended before the inherited prefix did
+   */
   inheritedRecordCount?: number;
   error?: string;
 }
@@ -243,7 +253,7 @@ export class CodexScanner {
         maxLines: HEAD_MAX_LINES,
         stopWhen: (record) => extractor.accept(record),
       });
-      head = extractor.head();
+      head = extractor.head(!result.stoppedEarly);
       final = extractor.done() || (!result.stoppedEarly && !this.isLive(file.mtimeMs));
     } catch (error) {
       head = { metadata: {}, error: error instanceof Error ? error.message : String(error) };
@@ -273,17 +283,22 @@ class HeadExtractor {
   private eventTitle: string | undefined;
   private itemTitle: string | undefined;
   private readonly inheritedTracker = new InheritedHistoryTracker();
+  private readonly taskNameFinder = new SubagentTaskNameFinder();
   private inheritedCount = 0;
+  /** Whether the last record read was inherited (the prefix may continue) */
+  private inPrefix = false;
 
   /** Returns true once nothing more is needed. */
   accept(record: CodexRolloutRecord): boolean {
     const { payload } = record;
     // A subagent's title and model come from its own history, not the copy
     // of its parent's history that precedes it.
-    if (this.inheritedTracker.isInherited(record, this.metadata)) {
+    this.inPrefix = this.inheritedTracker.isInherited(record, this.metadata);
+    if (this.inPrefix) {
       this.inheritedCount++;
       return false;
     }
+    this.taskNameFinder.accept(record, this.metadata);
     if (record.type === 'session_meta' && !this.haveMetadata) {
       this.metadata = parseSessionMeta(payload);
       this.haveMetadata = true;
@@ -312,13 +327,29 @@ class HeadExtractor {
     return this.haveMetadata && this.model !== undefined && this.eventTitle !== undefined;
   }
 
-  head(): RolloutHead {
+  /**
+   * @param readToEnd whether every record of the file was read
+   */
+  head(readToEnd: boolean): RolloutHead {
+    const userTitle = this.eventTitle ?? this.itemTitle;
+    const { taskName } = this.taskNameFinder;
+    let titleSource: SessionTitleSource | undefined;
+    if (userTitle) {
+      titleSource = 'user_message';
+    } else if (taskName) {
+      titleSource = 'agent_task';
+    }
+    // The count is exact only once the prefix has ended within the records read.
+    const countKnown = !this.inPrefix || readToEnd;
     return {
       metadata: this.metadata,
       model: this.model,
-      title: this.eventTitle ?? this.itemTitle,
+      title: userTitle ?? taskName,
+      titleSource,
       inheritedRecordCount:
-        this.metadata.historyStartOrdinal !== undefined ? this.inheritedCount : undefined,
+        this.metadata.historyStartOrdinal !== undefined && countKnown
+          ? this.inheritedCount
+          : undefined,
     };
   }
 }
@@ -356,6 +387,7 @@ export function buildSessionSummary(
     projectKey: projectKeyForCwd(metadata.cwd),
     projectName: projectNameForCwd(metadata.cwd),
     title: head.title,
+    titleSource: head.titleSource,
     startedAt: metadata.startedAt ?? fromName?.startedAt,
     updatedAt: file.mtimeMs,
     sizeBytes: file.size,

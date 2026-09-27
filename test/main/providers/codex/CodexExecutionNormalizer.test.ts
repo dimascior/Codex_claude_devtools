@@ -364,3 +364,56 @@ describe('normalizeCodexRollout — in-progress sessions', () => {
     });
   });
 });
+
+describe('normalizeCodexRollout — inter-agent messages', () => {
+  it('keeps agent replies recorded only as item events next to an inter-agent task', () => {
+    const records = [
+      {
+        lineNumber: 1,
+        ordinal: 0,
+        type: 'session_meta',
+        payload: { id: 't', source: { subagent: { thread_spawn: { parent_thread_id: 'p' } } } },
+      },
+      {
+        lineNumber: 2,
+        ordinal: 1,
+        type: 'inter_agent_communication_metadata',
+        payload: { trigger_turn: true },
+      },
+      {
+        lineNumber: 3,
+        ordinal: 2,
+        type: 'response_item',
+        payload: {
+          type: 'agent_message',
+          author: '/root',
+          recipient: '/root/check_logs',
+          content: [
+            { type: 'input_text', text: 'Message Type: NEW_TASK' },
+            { type: 'encrypted_content', encrypted_content: 'gAAAA' },
+          ],
+        },
+      },
+      {
+        lineNumber: 4,
+        ordinal: 3,
+        type: 'event_msg',
+        payload: {
+          type: 'item_completed',
+          item: { type: 'AgentMessage', id: 'msg_1', content: [{ type: 'Text', text: 'Done.' }] },
+        },
+      },
+    ];
+    const session = normalizeCodexRollout(records, { active: false });
+    expect(session.title).toBe('check_logs');
+    expect(session.titleSource).toBe('agent_task');
+    expect(
+      session.timeline.map((entry) =>
+        entry.kind === 'agent_message' ? [entry.text, entry.encrypted ?? false] : entry.kind
+      )
+    ).toEqual([
+      ['Message Type: NEW_TASK', true],
+      ['Done.', false],
+    ]);
+  });
+});

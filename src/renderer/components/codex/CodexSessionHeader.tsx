@@ -82,8 +82,17 @@ export const CodexSessionHeader = ({
             <h2
               className="min-w-0 truncate text-sm font-medium"
               style={{ color: COLOR_TEXT }}
-              title={session.title}
+              title={
+                session.titleSource === 'agent_task' && session.title
+                  ? `${session.title} (task name given when this subagent was spawned; the task text is stored encrypted)`
+                  : session.title
+              }
             >
+              {session.titleSource === 'agent_task' && (
+                <span className="font-normal" style={{ color: COLOR_TEXT_MUTED }}>
+                  Task{' '}
+                </span>
+              )}
               {session.title ?? 'Codex session'}
             </h2>
           </div>

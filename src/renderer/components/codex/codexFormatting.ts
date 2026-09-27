@@ -271,7 +271,9 @@ export function describeEvidence(exec: Execution): string[] {
   }
   if (cellLink) {
     const detail = cellLink.detail ? ` (${cellLink.detail})` : '';
-    lines.push(`Cell link: ${CORRELATION_TEXT[cellLink.method]}${detail}`);
+    // A top-level record has no cell: its link is to a call, or says why none was found.
+    const label = exec.parentId ? 'Cell link' : 'Attribution';
+    lines.push(`${label}: ${CORRELATION_TEXT[cellLink.method]}${detail}`);
   }
   if (callSiteLink) {
     const detail = callSiteLink.detail ? ` (${callSiteLink.detail})` : '';

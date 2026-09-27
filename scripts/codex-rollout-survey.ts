@@ -837,7 +837,8 @@ async function surveyNormalized(
   if (live) flags.add('live (written in the last 10 minutes)', whole);
   if (session.turnInProgress) flags.add('turn in progress', whole);
   if (!session.metadata.cwd) flags.add('no cwd', whole);
-  if (!session.title) flags.add('no title (no user request found)', whole);
+  if (!session.title) flags.add('no title (no user request or subagent task name found)', whole);
+  if (session.titleSource === 'agent_task') flags.add('titled by subagent task name', whole);
   if (!session.model) flags.add('no model (no turn_context)', whole);
   if (!session.tokenUsage) flags.add('no token usage', whole);
   if (session.metadata.parentThreadId) flags.add('subagent or forked session', whole);
@@ -1052,6 +1053,7 @@ function surveyList(list: AgentSessionList, survey: Survey): void {
       t.add(session.compressed ? 'error (compressed)' : 'error reading head', where);
     if (!session.cwd) t.add('no cwd', where);
     if (!session.title) t.add('no title', where);
+    if (session.titleSource === 'agent_task') t.add('titled by subagent task name', where);
     if (!session.model) t.add('no model', where);
     if (session.parentThreadId) t.add('subagent or forked', where);
     if (session.compressed) t.add('compressed', where);

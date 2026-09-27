@@ -33,6 +33,11 @@ export interface AgentMessageEntry extends TimelineEntryBase {
   author?: string;
   /** Recipient for inter-agent messages */
   recipient?: string;
+  /**
+   * Whether part of the message was stored encrypted (inter-agent task payloads);
+   * `text` holds only the readable part, and the encrypted part is never decoded
+   */
+  encrypted?: boolean;
 }
 
 /**

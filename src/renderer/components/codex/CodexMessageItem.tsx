@@ -12,7 +12,7 @@ import {
   TAG_BORDER,
   TAG_TEXT,
 } from '@renderer/constants/cssVariables';
-import { Bot, User } from 'lucide-react';
+import { Bot, Lock, User } from 'lucide-react';
 import remarkGfm from 'remark-gfm';
 
 import type { AgentMessageEntry, UserMessageEntry } from '@shared/types';
@@ -33,6 +33,13 @@ export const CodexMessageItem = ({ entry }: CodexMessageItemProps): React.JSX.El
     entry.kind === 'agent_message' && (entry.author || entry.recipient)
       ? `${entry.author ?? '?'} → ${entry.recipient ?? '?'}`
       : undefined;
+  const encrypted = entry.kind === 'agent_message' && entry.encrypted === true;
+  let label = 'Codex';
+  if (isUser) {
+    label = 'User request';
+  } else if (route) {
+    label = 'Inter-agent message';
+  }
 
   return (
     <div
@@ -53,7 +60,7 @@ export const CodexMessageItem = ({ entry }: CodexMessageItemProps): React.JSX.El
         ) : (
           <Bot className="size-3.5" style={{ color: 'var(--chat-ai-icon)' }} />
         )}
-        <span style={{ color: COLOR_TEXT_SECONDARY }}>{isUser ? 'User request' : 'Codex'}</span>
+        <span style={{ color: COLOR_TEXT_SECONDARY }}>{label}</span>
         {phase && (
           <span
             className="rounded px-1.5 py-px text-[10px] font-medium normal-case tracking-normal"
@@ -76,6 +83,16 @@ export const CodexMessageItem = ({ entry }: CodexMessageItemProps): React.JSX.El
           {entry.text}
         </ReactMarkdown>
       </div>
+      {encrypted && (
+        <div
+          className="mt-1 flex items-center gap-1 text-[11px]"
+          style={{ color: COLOR_TEXT_MUTED }}
+          title="Codex stored this part of the message encrypted; it is not decoded."
+        >
+          <Lock className="size-3" />
+          Payload encrypted / not shown
+        </div>
+      )}
       {entry.kind === 'user_message' && (entry.imageCount ?? 0) > 0 && (
         <div className="mt-1 text-[11px]" style={{ color: COLOR_TEXT_MUTED }}>
           {entry.imageCount} image(s) attached

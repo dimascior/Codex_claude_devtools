@@ -30,7 +30,8 @@ test/
 │   │   └── guards.test.ts
 │   ├── providers/
 │   │   └── codex/       # Rollout parsing, normalization, output/command parsing, session service,
-│   │                    # realObserved (real fixtures), evidenceLinking (linking rules)
+│   │                    # realObserved (real fixtures), evidenceLinking (linking rules),
+│   │                    # CodexMetadataParser (UUIDv7 ids, inherited history, subagent task names)
 │   ├── services/        # Service tests
 │   │   ├── analysis/    (ChunkBuilder)
 │   │   ├── discovery/   (ProjectPathResolver, SessionSearcher)

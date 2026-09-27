@@ -65,6 +65,13 @@ Counts derived from it are a snapshot and may differ slightly between files in t
     parser defects found and corrected (subagent boundary, hosted web
     search item-before-call).
 
+`codebase-review-2026-09-27.md`
+    Review of that commit against nine properties, the upstream source that
+    explains subagent rollouts whose boundary equals their record count
+    (legacy rollout migration), the subagent-title and id-less web search
+    decisions, the defects corrected afterwards, the remaining unresolved
+    cases, and known risks left for follow-up.
+
 `../../tests/fixtures/codex/real-observed/*.jsonl`
     Sanitized structural records derived from real rollout records.
     - `subagent-thread-spawn.jsonl`: one complete 171-line subagent rollout

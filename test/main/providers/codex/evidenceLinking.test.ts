@@ -177,6 +177,85 @@ describe('outcome text written by the Codex harness', () => {
   });
 });
 
+describe('hosted web search items persisted before their call', () => {
+  function webSearchCall(id: string, second: number): CodexRolloutRecord {
+    return record(
+      'response_item',
+      {
+        type: 'web_search_call',
+        id,
+        status: 'completed',
+        action: { type: 'search', query: 'q' },
+        internal_chat_message_metadata_passthrough: { turn_id: TURN },
+      },
+      second
+    );
+  }
+
+  it('adopts the call only onto a WebSearch item with the same id', () => {
+    const records = [
+      ...start(),
+      record(
+        'event_msg',
+        {
+          type: 'item_completed',
+          turn_id: TURN,
+          item: { type: 'WebSearch', id: 'ws_1', query: 'q', action: { type: 'search' } },
+          completed_at_ms: Date.UTC(2026, 8, 27, 4, 0, 1),
+        },
+        1
+      ),
+      webSearchCall('ws_1', 2),
+      // A different item type carrying the id of the next call is not merged into it.
+      commandItem('ws_2', 'ls', 0, 3),
+      webSearchCall('ws_2', 4),
+    ];
+    const list = executions(normalizeCodexRollout(records, { active: false }).timeline);
+
+    const adopted = list.filter((exec) => exec.id === 'ws_1');
+    expect(adopted).toHaveLength(1);
+    expect(adopted[0]).toMatchObject({
+      kind: 'web_search',
+      status: 'completed',
+      args: { type: 'search', query: 'q' },
+      evidence: {
+        observed: { kind: 'call', recordType: 'web_search_call', lineNumber: 4 },
+        result: { kind: 'item', recordType: 'item_completed/WebSearch', lineNumber: 3 },
+        cellLink: { method: 'explicit_id' },
+      },
+    });
+
+    expect(
+      list.filter((exec) => exec.id.startsWith('ws_2')).map((exec) => [exec.id, exec.kind])
+    ).toEqual([
+      ['ws_2', 'command'],
+      ['ws_2#2', 'web_search'],
+    ]);
+  });
+
+  it("keeps the item's action when the adopted call records none", () => {
+    const records = [
+      ...start(),
+      record(
+        'event_msg',
+        {
+          type: 'item_completed',
+          turn_id: TURN,
+          item: { type: 'WebSearch', id: 'ws_1', query: 'q', action: { type: 'open_page' } },
+        },
+        1
+      ),
+      record('response_item', { type: 'web_search_call', id: 'ws_1', status: 'completed' }, 2),
+    ];
+    const [adopted] = executions(normalizeCodexRollout(records, { active: false }).timeline);
+    expect(adopted).toMatchObject({
+      id: 'ws_1',
+      args: { action: 'open_page' },
+      evidence: { cellLink: { method: 'explicit_id' } },
+    });
+  });
+});
+
 describe('attributing exec- items to code cells', () => {
   it('links a recorded command to the unique script call site with the same command', () => {
     const records = [

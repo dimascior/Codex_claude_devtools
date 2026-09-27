@@ -60,11 +60,10 @@ export function parseSessionMeta(payload: Record<string, unknown>): CodexSession
 }
 
 /**
- * Whether a record was inherited from the parent thread (it precedes the
- * subagent's own history). Records without an ordinal cannot be placed and
- * count as the session's own.
+ * Whether a record lies below the declared boundary of the inherited prefix.
+ * Records without an ordinal cannot be placed and count as the session's own.
  */
-export function isInheritedRecord(
+function isBelowDeclaredBoundary(
   ordinal: number | undefined,
   metadata: Pick<CodexSessionMetadata, 'historyStartOrdinal'>
 ): boolean {
@@ -82,7 +81,10 @@ export function isInheritedRecord(
  * `subagent_history_start_ordinal` marks the boundary correctly in 12 of the
  * 22 real subagent rollouts. In the other 10 (cli 0.147.0-alpha.6.6 and some
  * 0.153.0 rollouts) it equals the rollout's record count, so every record,
- * including the subagent's own turns and tool calls, lies below it. The prefix
+ * including the subagent's own turns and tool calls, lies below it. Upstream
+ * Codex writes that shape when it migrates a legacy subagent rollout to the
+ * paginated format: the boundary is set to the end of the migrated records
+ * (docs/codex-real-validation/codebase-review-2026-09-27.md). The prefix
  * therefore also ends at the first structural marker of the subagent's own
  * history: a `thread_settings_applied` event for the rollout's own thread id,
  * or a turn whose UUIDv7 turn id was minted after the rollout's own thread id.
@@ -96,7 +98,7 @@ export class InheritedHistoryTracker {
     record: Pick<CodexRolloutRecord, 'ordinal' | 'type' | 'payload'>,
     metadata: Pick<CodexSessionMetadata, 'historyStartOrdinal' | 'threadId'>
   ): boolean {
-    if (this.ownHistoryStarted || !isInheritedRecord(record.ordinal, metadata)) {
+    if (this.ownHistoryStarted || !isBelowDeclaredBoundary(record.ordinal, metadata)) {
       return false;
     }
     if (startsOwnHistory(record, metadata.threadId)) {
@@ -126,12 +128,65 @@ function startsOwnHistory(
   return false;
 }
 
-/** Millisecond timestamp embedded in a UUIDv7, or undefined for other ids. */
+/** A canonical RFC 9562 UUID of version 7 (version nibble 7, variant 10xx). */
+const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * Millisecond timestamp embedded in a UUIDv7, or undefined for any other id
+ * (other versions, other variants, malformed strings).
+ */
 export function uuidV7Millis(id: string | undefined): number | undefined {
-  if (!id || !/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-/i.test(id)) {
+  if (!id || !UUID_V7.test(id)) {
     return undefined;
   }
   return parseInt(id.slice(0, 8) + id.slice(9, 13), 16);
+}
+
+/**
+ * Finds a subagent's task name, for use as its title.
+ *
+ * A subagent's task arrives as an inter-agent `agent_message` that Codex
+ * persists immediately after `inter_agent_communication_metadata` with
+ * `trigger_turn: true`. The task text is stored encrypted; the readable part of
+ * the message is only a header (`Message Type: NEW_TASK`, `Task name:
+ * <recipient>`, `Sender: <author>`), so the task name, the last segment of the
+ * recipient's agent path, is the only readable description of the task. Feed
+ * it the subagent's own records only, never inherited ones.
+ */
+export class SubagentTaskNameFinder {
+  private triggerPending = false;
+  private found: string | undefined;
+
+  accept(
+    record: Pick<CodexRolloutRecord, 'type' | 'payload'>,
+    metadata: Pick<CodexSessionMetadata, 'source'>
+  ): void {
+    const triggered = this.triggerPending;
+    this.triggerPending =
+      record.type === 'inter_agent_communication_metadata' && record.payload.trigger_turn === true;
+    if (
+      this.found === undefined &&
+      triggered &&
+      metadata.source?.startsWith('subagent') === true &&
+      record.type === 'response_item' &&
+      record.payload.type === 'agent_message'
+    ) {
+      this.found = lastAgentPathSegment(str(record.payload.recipient));
+    }
+  }
+
+  get taskName(): string | undefined {
+    return this.found;
+  }
+}
+
+/** `task` for an agent path `/root/…/task`; undefined for the root or other strings. */
+function lastAgentPathSegment(agentPath: string | undefined): string | undefined {
+  if (!agentPath?.startsWith('/')) {
+    return undefined;
+  }
+  const segments = agentPath.split('/').filter(Boolean);
+  return segments.length >= 2 ? segments[segments.length - 1] : undefined;
 }
 
 function positiveInteger(value: unknown): number | undefined {
