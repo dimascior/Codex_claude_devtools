@@ -168,3 +168,38 @@ Before = parser at be6c718, after = this change. Columns: parsed / rendered / ex
 5. Do hosted `web_search_call` ids equal WebSearch item ids in the three sessions with hosted search?
 6. For direct `apply_patch` custom tool calls (316), are FileChange item ids equal to the call id?
 7. The 8 `Extension {action, kind, query, results}` items: which `kind`, and which call do they belong to?
+
+## 7. Changes made (after the findings above)
+
+| Finding | Change | Evidence level |
+|---|---|---|
+| 1, 3 | Execution evidence is explicit in the domain (`Execution.evidence`): `code` (script call site), `observed` and `result` (provider `call` / `output` / `item` / `inventory` records), `cellLink` and `callSiteLink` (`explicit_id`, `turn_window`, `content`, `unresolved`). Script call sites keep status `unknown` and are labelled "script only" in the UI. The positional `‹…›` fallback and top-level text matching are removed. | R (+U for the inventory feature flag) |
+| 2, 8, 9, 10, 11 | Every `item_completed` execution item and legacy `*_end` event becomes recorded evidence. Explicit id → applied to that call. `exec-` id → attached to the only running cell of the item's turn (`turn_window`), otherwise a top-level unlinked record with the reason. Script call site ↔ recorded command only on unique identical command text (`content`). | R + S |
+| 5, 7 | Durations keep their source: `reported`, `provider_timestamps`, `record_timestamps`. The Extension `durationMs` is not used as the measured duration. | R + U |
+| 6, 16 | Cell windows: kept open by yield headers and `notify()` outputs (which carry `name`), closed by terminal headers, header-less outputs, a `wait` reporting completion, and turn end. A header-less final output leaves the status `unknown` with "Output recorded without a script status header", never "No result was recorded". | R + U |
+| 12 | Records before `subagent_history_start_ordinal` are summarized as one `inherited_context` entry and excluded from executions, stats, title and model. The session list reports `inheritedRecordCount`. | R + U |
+| 13, 14, 15 | Outcome forms: `(Command\|Tool call) blocked by PreToolUse hook:` → declined; `Wall time … / aborted by user` → interrupted with the reported wall time; `write_stdin failed:` / `Unified exec process failed:` / `Unknown process id` → failed. | S + U |
+| 17, 18 | No parser change. The survey reports anomalies by execution kind and by `cli_version`, and classifies calls without a result by structural family. | — |
+| 19, 20 | Recognized, not rendered. The survey labels them "(not rendered, by design)". | R |
+| — | An output whose call record is missing now has an unknown outcome instead of "completed". | S |
+
+## 8. Validation on the committed real evidence
+
+The survey of the parser before the change (commit 371850a, parser as of be6c718) and after it, on the same 7 rollouts rebuilt from `tests/fixtures/codex/real-observed` with real line numbers:
+
+| Anomaly / rendering | Before | After | Why |
+|---|---:|---:|---|
+| call without a result | 14 | 5 | 9 cells whose sanitized output has no status header were misreported as having no result (row 16). The 5 left are exec calls whose outputs are in a different fixture file; the survey classifies them as "turn never closed: rollout ended mid-turn" (fixture excerpt, not Codex). |
+| output without a matching call | 7 | 7 | Unchanged: outputs whose calls are outside the excerpts. Their outcome is now unknown instead of completed. |
+| recorded item not linked to a call or cell | (not detected) | 12 | 10 items in the by-type excerpt (no calls or cells in it), the Window 8 straddler, and a McpToolCall whose `js` call is not in its excerpt. Before, 10 of these were silently dropped. |
+| finished without a duration | 0 | 4 | 2 FileChange and 2 WebSearch items that Codex recorded without timing. They are now kept, so their missing duration becomes visible. |
+| nested command → completed | 3 | 2 | Before, all 3 CommandExecution items were appended to "the most recent running cell". That included the Window 8 straddler, attributed to exec A only because exec A's header-less output left it "running". |
+| nested patch / mcp / web_search → completed | 0 | 5 / 5 / 1 | Previously dropped FileChange, McpToolCall and WebSearch items, now attributed by turn and order. |
+| subagent timeline | 13 user messages, 7 final answers, 2 aborts, 1 inter-agent message (copied) | 1 inherited-context entry | Row 12. |
+
+Expected effect on the full 58-rollout corpus. This is a prediction that has to be re-run locally with `scripts/codex-rollout-survey.ts --all`:
+
+- **Command completed without an exit code (326).** Should drop to about 0 if the 323 `Command …:` outputs are PreToolUse hook blocks: they would show as declined. The 3 `aborted by user` outputs become interrupted. The survey's "Harness messages" table shows the form of each output.
+- **Finished without a duration (25).** The 25 hosted web searches remain. New rows may appear for top-level recorded items without timing; the survey's by-kind table separates them.
+- **Call without a result (6).** Cases inside inherited prefixes disappear; the rest are classified by family.
+- **Nested `… → unknown`.** These remain for script call sites, now labelled script-only. New nested rows appear for FileChange, McpToolCall, WebSearch and Extension items, and for commands attributed by turn and order.

@@ -35,6 +35,7 @@ function renderEntry(entry: TimelineEntry): React.JSX.Element {
       return <CodexReasoningItem entry={entry} />;
     case 'turn_event':
     case 'compaction':
+    case 'inherited_context':
       return <CodexEventItem entry={entry} />;
   }
 }

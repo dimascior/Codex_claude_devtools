@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  describeEvidence,
+  durationSourceLabel,
+  evidenceBadge,
   executionSummary,
   filterTimeline,
   formatRelativeTime,
@@ -20,6 +23,7 @@ function exec(overrides: Partial<Execution>): Execution {
     status: 'completed',
     timestamp: '2026-09-27T10:00:00.000Z',
     lineNumber: 1,
+    evidence: {},
     ...overrides,
   };
 }
@@ -33,6 +37,16 @@ describe('codexFormatting', () => {
     expect(statusLabel(exec({ exitCode: 0 }))).toBe('exit 0');
     expect(statusLabel(exec({ status: 'failed', exitCode: 101 }))).toBe('exit 101');
     expect(statusLabel(exec({ status: 'unknown' }))).toBe('not recorded');
+    expect(
+      statusLabel(
+        exec({
+          status: 'unknown',
+          evidence: {
+            result: { kind: 'output', recordType: 'custom_tool_call_output', lineNumber: 2 },
+          },
+        })
+      )
+    ).toBe('outcome unknown');
     expect(statusLabel(exec({ status: 'declined' }))).toBe('declined');
   });
 
@@ -82,5 +96,64 @@ describe('codexFormatting', () => {
     expect(formatRelativeTime(now - 5 * 60_000, now)).toBe('5m ago');
     expect(formatRelativeTime(now - 3 * 3_600_000, now)).toBe('3h ago');
     expect(shortCallId('call_abcdef123456:2')).toBe('ef123456');
+  });
+
+  it('labels each evidence class and never presents a script call site as recorded', () => {
+    const item = {
+      kind: 'item' as const,
+      recordType: 'item_completed/FileChange',
+      lineNumber: 100,
+    };
+    const scriptOnly = exec({ status: 'unknown', evidence: { code: { line: 3, dynamic: true } } });
+    expect(evidenceBadge(scriptOnly)?.label).toBe('script only');
+    expect(describeEvidence(scriptOnly)).toEqual([
+      'Script call site at line 3 of the cell (arguments only known at runtime)',
+      'Result: none recorded',
+    ]);
+
+    const recorded = exec({
+      evidence: { observed: item, result: item, cellLink: { method: 'turn_window' } },
+    });
+    expect(evidenceBadge(recorded)?.label).toBe('recorded');
+    expect(describeEvidence(recorded)).toEqual([
+      'Observed: item_completed/FileChange, rollout line 100',
+      'Cell link: same turn, only running cell (record order)',
+    ]);
+
+    const linked = exec({
+      evidence: {
+        code: { line: 1, dynamic: false },
+        observed: item,
+        result: item,
+        cellLink: { method: 'turn_window' },
+        callSiteLink: { method: 'content', detail: 'Identical command text' },
+      },
+    });
+    expect(evidenceBadge(linked)?.label).toBe('script + record');
+
+    const unlinked = exec({
+      evidence: {
+        observed: item,
+        result: item,
+        cellLink: { method: 'unresolved', detail: '2 cells of its turn were running' },
+      },
+    });
+    expect(evidenceBadge(unlinked)).toMatchObject({ label: 'unlinked record' });
+    expect(evidenceBadge(unlinked)?.title).toContain('2 cells of its turn were running');
+
+    // Direct calls with their own records need no badge.
+    const direct = exec({
+      evidence: {
+        observed: { kind: 'call', recordType: 'function_call', lineNumber: 1 },
+        result: { kind: 'output', recordType: 'function_call_output', lineNumber: 2 },
+      },
+    });
+    expect(evidenceBadge(direct)).toBeUndefined();
+  });
+
+  it('names where a duration came from', () => {
+    expect(durationSourceLabel('reported')).toBe('reported by Codex');
+    expect(durationSourceLabel('provider_timestamps')).toBe('from Codex start and end times');
+    expect(durationSourceLabel('record_timestamps')).toBe('between rollout records');
   });
 });

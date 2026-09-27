@@ -11,16 +11,24 @@
  * | User message   | `user_message` / `UserMessage` events   | `message` items with role `user`  |
  * | Agent message  | `message` items with role `assistant`   | `agent_message` events            |
  * | Reasoning      | `reasoning` items                       | `agent_reasoning` events          |
- * | Executions     | tool call items + outputs               | —                                 |
+ * | Executions     | tool call items + outputs, item records | —                                 |
  *
  * Reasoning is surfaced as its readable summary; encrypted reasoning content
  * is reported as unavailable and never decoded.
+ *
+ * Subagent rollouts start with records copied from the parent thread
+ * (`session_meta.subagent_history_start_ordinal`). Those are the parent's
+ * history, so they are summarized by one `inherited_context` entry instead of
+ * being rendered as the subagent's own activity.
  */
+
+import { hasRecordedResult, isStaticOnly } from '@shared/utils/executionEvidence';
 
 import { parseCodexEvent } from './CodexEventParser';
 import { CodexExecutionParser, type ExecutionContext } from './CodexExecutionParser';
 import {
   type CodexSessionMetadata,
+  isInheritedRecord,
   isInjectedContext,
   parseSessionMeta,
   toPreview,
@@ -33,6 +41,7 @@ import type {
   CompactionEntry,
   Execution,
   ExecutionStats,
+  InheritedContextEntry,
   ReasoningEntry,
   TimelineEntry,
   UserMessageEntry,
@@ -95,6 +104,7 @@ export function normalizeCodexRollout(
   let sawTurnEvents = false;
   let currentTurnStartLine = 0;
   let lastReasoningEventLine = -1;
+  let inherited: InheritedContextEntry | undefined;
 
   const entries: TimelineEntry[] = [];
   const eventUserMessages: UserMessageEntry[] = [];
@@ -129,6 +139,20 @@ export function normalizeCodexRollout(
       lastTimestamp = record.timestamp;
     }
     const base = { timestamp: record.timestamp ?? lastTimestamp, lineNumber: record.lineNumber };
+
+    if (isInheritedRecord(record.ordinal, metadata)) {
+      inherited ??= {
+        kind: 'inherited_context',
+        id: `i-${record.lineNumber}`,
+        ...base,
+        recordCount: 0,
+        parentThreadId: metadata.parentThreadId,
+        lastLineNumber: record.lineNumber,
+      };
+      inherited.recordCount++;
+      inherited.lastLineNumber = record.lineNumber;
+      continue;
+    }
 
     switch (record.type) {
       case 'session_meta':
@@ -305,6 +329,7 @@ export function normalizeCodexRollout(
           case 'turn_complete':
             sawTurnEvents = true;
             turnInProgress = false;
+            parser.closeTurn(event.turnId ?? turnId);
             if (event.error) {
               entries.push({
                 kind: 'turn_event',
@@ -339,14 +364,8 @@ export function normalizeCodexRollout(
               encrypted: false,
             });
             break;
-          case 'command_result':
-            pushExecution(parser.handleCommandResult(event.result, record, context()));
-            break;
-          case 'patch_result':
-            parser.handlePatchResult(event.callId, event.success, event.stderr, event.stdout);
-            break;
-          case 'mcp_result':
-            parser.handleMcpResult(event.callId, event.durationMs, event.isError, event.error);
+          case 'recorded_item':
+            pushExecution(parser.handleRecordedItem(event.item, event.envelope, record, context()));
             break;
           case 'ignored':
             break;
@@ -372,6 +391,7 @@ export function normalizeCodexRollout(
   const reasoning = itemReasoning.length > 0 ? itemReasoning : eventReasoning;
 
   const timeline: TimelineEntry[] = [
+    ...(inherited ? [inherited] : []),
     ...entries,
     ...userMessages,
     ...agentMessages,
@@ -404,6 +424,9 @@ function computeExecutionStats(executions: readonly Execution[]): ExecutionStats
     total: executions.length,
     commands: 0,
     nested: 0,
+    recorded: 0,
+    scriptOnly: 0,
+    unattributed: 0,
     failed: 0,
     running: 0,
     declined: 0,
@@ -412,8 +435,20 @@ function computeExecutionStats(executions: readonly Execution[]): ExecutionStats
   };
   const visit = (exec: Execution, nested: boolean): void => {
     stats.byKind[exec.kind] = (stats.byKind[exec.kind] ?? 0) + 1;
-    if (exec.kind === 'command') stats.commands++;
+    // A script call site is not a command that ran; count commands with a provider record.
+    if (exec.kind === 'command' && (exec.evidence.observed || exec.evidence.result)) {
+      stats.commands++;
+    }
     if (nested) stats.nested++;
+    if (hasRecordedResult(exec)) stats.recorded++;
+    if (isStaticOnly(exec)) stats.scriptOnly++;
+    if (
+      !nested &&
+      exec.evidence.observed?.kind === 'item' &&
+      exec.evidence.cellLink?.method === 'unresolved'
+    ) {
+      stats.unattributed++;
+    }
     if (exec.status === 'failed') stats.failed++;
     if (exec.status === 'running') stats.running++;
     if (exec.status === 'declined') stats.declined++;

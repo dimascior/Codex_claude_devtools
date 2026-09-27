@@ -34,6 +34,8 @@ export interface CodexRolloutRecord {
   lineNumber: number;
   /** ISO timestamp from the envelope (absent in legacy rollouts) */
   timestamp?: string;
+  /** Envelope ordinal: position in the thread's persisted history (0 = session_meta) */
+  ordinal?: number;
   /** Record type (`session_meta`, `response_item`, `event_msg`, …) */
   type: string;
   /** Record payload */
@@ -68,6 +70,8 @@ export interface CodexSessionMetaPayload {
   agent_role?: string;
   agent_type?: string;
   agent_path?: string;
+  /** First ordinal of the subagent's own history; earlier records are inherited */
+  subagent_history_start_ordinal?: number;
   git?: CodexGitInfo;
 }
 

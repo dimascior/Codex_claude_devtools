@@ -61,11 +61,79 @@ export type ExecutionStatus =
 export type ExecutionGeneration = 'function_call' | 'local_shell' | 'code_mode';
 
 /**
- * Where a code cell's nested calls came from.
- * - `recorded`: the harness persisted the call inventory (authoritative)
- * - `script`: statically extracted from the cell source (best effort)
+ * Provider record classes that can evidence an execution.
+ * - `call`: a model-issued call record (`function_call`, `custom_tool_call`, hosted calls)
+ * - `output`: the call's output record (`function_call_output`, `custom_tool_call_output`, …)
+ * - `item`: a harness item or event record (`item_completed`, `exec_command_end`, …)
+ * - `inventory`: an entry in a provider-recorded list of nested calls (`executed_tool_calls`)
  */
-export type NestedCallSource = 'recorded' | 'script';
+export type RecordEvidenceKind = 'call' | 'output' | 'item' | 'inventory';
+
+export interface RecordEvidence {
+  kind: RecordEvidenceKind;
+  /** Provider record type, e.g. `custom_tool_call` or `item_completed/FileChange` */
+  recordType: string;
+  /** 1-based line of the record in the session file */
+  lineNumber: number;
+  /** Provider id carried by the record (call id or item id) */
+  recordId?: string;
+}
+
+/** A call site in a code-mode cell script, found by static analysis. */
+interface CodeEvidence {
+  /** 1-based line of the call site within the cell source */
+  line: number;
+  /** Whether the call's arguments are only known at runtime */
+  dynamic: boolean;
+}
+
+/**
+ * How one record was related to another, strongest first.
+ * - `explicit_id`: the records share an identifier
+ * - `turn_window`: same turn id, recorded while exactly one code cell of that
+ *   turn was running (record order); no identifier links them
+ * - `content`: matched by content (identical normalized command); used only
+ *   when the match is unique on both sides
+ * - `unresolved`: no defensible relation could be established
+ */
+export type CorrelationMethod = 'explicit_id' | 'turn_window' | 'content' | 'unresolved';
+
+export interface EvidenceLink {
+  method: CorrelationMethod;
+  /** Why this method applies (or why no link could be made) */
+  detail?: string;
+}
+
+/**
+ * What is actually known about an execution. The classes are kept apart
+ * because they mean different things:
+ * - `code`: represented in a code-mode script. A `tools.x(...)` expression is
+ *   not evidence that anything ran.
+ * - `observed`: a provider record shows the operation was attempted
+ * - `result`: a provider record carries the operation's result
+ * An execution with `code` and neither `observed` nor `result` is inferred by
+ * static parsing only (see `isStaticOnly` in `@shared/utils/executionEvidence`).
+ */
+export interface ExecutionEvidence {
+  code?: CodeEvidence;
+  observed?: RecordEvidence;
+  result?: RecordEvidence;
+  /**
+   * Nested item records: how the item was attributed to its code cell.
+   * Top-level item records: why no call or cell could be linked (`unresolved`).
+   */
+  cellLink?: EvidenceLink;
+  /** How a recorded item was matched to a call site (script or inventory entry) */
+  callSiteLink?: EvidenceLink;
+}
+
+/**
+ * Where `durationMs` came from.
+ * - `reported`: measured by the provider (a duration field or an output header wall time)
+ * - `provider_timestamps`: computed from the provider's own start/completion timestamps
+ * - `record_timestamps`: computed from the envelope timestamps of the call and result records
+ */
+export type DurationSource = 'reported' | 'provider_timestamps' | 'record_timestamps';
 
 export interface Execution {
   /** Provider call id (e.g. `call_…`), or `${parentId}:${index}` for nested calls */
@@ -110,10 +178,10 @@ export interface Execution {
   timestamp: string;
   /** ISO timestamp when the final output was recorded */
   completedAt?: string;
-  /** Duration in ms: reported wall time when available, otherwise observed */
+  /** Duration in ms (see `durationSource`) */
   durationMs?: number;
-  /** Whether `durationMs` came from the provider's own measurement */
-  durationReported?: boolean;
+  /** Where `durationMs` came from */
+  durationSource?: DurationSource;
   /** Provider turn id the execution belongs to */
   turnId?: string;
   /** 1-based line of the call record in the session file (audit anchor) */
@@ -124,14 +192,17 @@ export interface Execution {
   cellId?: string;
   /** Long-running process/session id (Codex unified exec) */
   processId?: string;
-  /** Nested operations (code-mode cells) */
+  /**
+   * Nested operations (code-mode cells). Script call sites, provider inventory
+   * entries and recorded items can all appear here; `evidence` tells them apart.
+   */
   children?: Execution[];
-  /** Where `children` came from */
-  childrenSource?: NestedCallSource;
-  /** Whether the provider certified the nested call inventory as complete */
+  /** Whether the provider certified its recorded call inventory as complete */
   childrenComplete?: boolean;
   /** Paths touched by a patch execution */
   patchFiles?: string[];
+  /** What is actually known about this execution, and from which records */
+  evidence: ExecutionEvidence;
 }
 
 /**
@@ -140,10 +211,16 @@ export interface Execution {
 export interface ExecutionStats {
   /** Top-level executions */
   total: number;
-  /** Command executions including nested ones */
+  /** Command executions with a provider record, nested ones included */
   commands: number;
   /** Nested executions inside code cells */
   nested: number;
+  /** Executions (top-level or nested) with a provider-recorded result */
+  recorded: number;
+  /** Nested executions known only from static analysis of a cell script */
+  scriptOnly: number;
+  /** Item records that could not be linked to a call or code cell */
+  unattributed: number;
   failed: number;
   running: number;
   declined: number;

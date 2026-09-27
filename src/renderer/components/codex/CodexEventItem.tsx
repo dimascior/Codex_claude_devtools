@@ -1,21 +1,44 @@
 /**
- * CodexEventItem - Turn-level markers: aborted/failed turns and compactions.
+ * CodexEventItem - Turn-level markers: aborted/failed turns, compactions, and
+ * the history a subagent inherited from its parent thread.
  */
 
 import { useState } from 'react';
 
 import { COLOR_BORDER, COLOR_TEXT_MUTED } from '@renderer/constants/cssVariables';
 import { formatDuration } from '@renderer/utils/formatters';
-import { ChevronRight, CircleStop, Layers, TriangleAlert } from 'lucide-react';
+import { ChevronRight, CircleStop, GitFork, Layers, TriangleAlert } from 'lucide-react';
 
-import type { CompactionEntry, TurnEventEntry } from '@shared/types';
+import type { CompactionEntry, InheritedContextEntry, TurnEventEntry } from '@shared/types';
 
 interface CodexEventItemProps {
-  entry: TurnEventEntry | CompactionEntry;
+  entry: TurnEventEntry | CompactionEntry | InheritedContextEntry;
 }
 
 export const CodexEventItem = ({ entry }: CodexEventItemProps): React.JSX.Element => {
   const [showSummary, setShowSummary] = useState(false);
+
+  if (entry.kind === 'inherited_context') {
+    return (
+      <div
+        className="flex items-center gap-2 rounded-md px-3 py-1.5 text-xs"
+        style={{
+          backgroundColor: 'var(--tag-bg)',
+          border: '1px solid var(--tag-border)',
+          color: 'var(--tag-text)',
+        }}
+        title={`Rollout lines ${entry.lineNumber}–${entry.lastLineNumber}`}
+      >
+        <GitFork className="size-3.5 shrink-0" />
+        <span>
+          {entry.recordCount} record{entry.recordCount === 1 ? '' : 's'} inherited from the parent
+          thread{entry.parentThreadId ? ` ${entry.parentThreadId}` : ''} when this subagent was
+          spawned. They are the parent&apos;s history, not this agent&apos;s activity, and are not
+          shown.
+        </span>
+      </div>
+    );
+  }
 
   if (entry.kind === 'compaction') {
     return (

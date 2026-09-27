@@ -55,6 +55,9 @@ export interface ParsedToolOutput {
 /** Only this many leading lines are inspected for a header. */
 const MAX_HEADER_LINES = 10;
 
+/** `Wall time: N seconds` then `aborted by user`: an interrupted tool call. */
+const ABORTED_WITH_WALL_TIME = /^Wall time:? ([\d.]+) seconds?\r?\n(aborted by user)/;
+
 /**
  * Flatten a function/custom tool output body to text.
  * Bodies are a plain string, an array of content items, or (older rollouts)
@@ -110,6 +113,18 @@ export function parseToolOutput(text: string): ParsedToolOutput {
   const structured = parseStructuredShellOutput(text);
   if (structured) {
     return structured;
+  }
+
+  // Interrupted tool call: `Wall time: N seconds` then `aborted by user`
+  // (codex-rs core/src/tools/parallel.rs). Header without an `Output:` line.
+  const aborted = ABORTED_WITH_WALL_TIME.exec(text);
+  if (aborted) {
+    const seconds = Number(aborted[1]);
+    return {
+      body: text.slice(aborted[0].length - aborted[2].length),
+      recognized: true,
+      wallTimeMs: Number.isFinite(seconds) ? Math.round(seconds * 1000) : undefined,
+    };
   }
 
   // A header is one or more recognised lines terminated by an `Output:` line.
@@ -195,6 +210,7 @@ function parseStructuredShellOutput(text: string): ParsedToolOutput | null {
 
 /**
  * Classify an unstructured output that signals a non-success outcome.
+ * Messages are the ones the Codex harness writes (codex-rs core/src).
  */
 export function classifyOutcomeText(
   text: string
@@ -202,6 +218,10 @@ export function classifyOutcomeText(
   const head = text.trimStart().slice(0, 400);
   if (!head) {
     return undefined;
+  }
+  // A PreToolUse hook blocked the call before it ran (hook_runtime.rs).
+  if (/^(?:Command|Tool call) blocked by PreToolUse hook:/.test(head)) {
+    return 'declined';
   }
   if (
     /rejected by (?:the )?user|declined by (?:the )?user|user (?:declined|rejected|denied)|approval (?:was )?denied|was not approved/i.test(
@@ -216,6 +236,10 @@ export function classifyOutcomeText(
   if (
     /^(?:error|failed|failure)\b/i.test(head) ||
     /^execution error\b/i.test(head) ||
+    // unified exec errors surfaced through write_stdin (write_stdin.rs, errors.rs)
+    head.startsWith('write_stdin failed:') ||
+    head.startsWith('Unified exec process failed:') ||
+    /^Unknown process id\b/.test(head) ||
     /^failed to parse function arguments/i.test(head) ||
     /^unsupported call\b/i.test(head) ||
     /^unknown tool\b/i.test(head) ||

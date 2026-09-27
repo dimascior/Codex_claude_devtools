@@ -49,6 +49,11 @@ export interface AgentSessionSummary {
   parentThreadId?: string;
   agentNickname?: string;
   agentRole?: string;
+  /**
+   * Number of records copied from the parent thread when this subagent was
+   * spawned (they precede the subagent's own history in the file)
+   */
+  inheritedRecordCount?: number;
   /** Why metadata could not be read, if it could not */
   error?: string;
 }

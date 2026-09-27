@@ -8,7 +8,7 @@ import { CopyablePath } from '@renderer/components/common/CopyablePath';
 import { COLOR_TEXT, COLOR_TEXT_MUTED } from '@renderer/constants/cssVariables';
 import { formatDuration } from '@renderer/utils/formatters';
 
-import { generationLabel } from './codexFormatting';
+import { describeEvidence, durationSourceLabel, generationLabel } from './codexFormatting';
 import { CodexOutputBlock } from './CodexOutputBlock';
 import { CodexPatchView } from './CodexPatchView';
 
@@ -54,7 +54,7 @@ function buildFacts(exec: Execution): Fact[] {
   if (exec.durationMs !== undefined) {
     facts.push({
       label: 'Duration',
-      value: `${formatDuration(exec.durationMs)} (${exec.durationReported ? 'reported by Codex' : 'observed between records'})`,
+      value: `${formatDuration(exec.durationMs)} (${durationSourceLabel(exec.durationSource)})`,
     });
   }
   if (exec.statusDetail) {
@@ -67,7 +67,7 @@ function buildFacts(exec: Execution): Fact[] {
     facts.push({ label: 'Cell', value: exec.cellId });
   }
   facts.push({
-    label: 'Call id',
+    label: exec.evidence.observed?.kind === 'item' ? 'Item id' : 'Call id',
     value: <CopyablePath displayText={exec.id} copyText={exec.id} className="font-mono" />,
   });
   const generation = generationLabel(exec);
@@ -88,6 +88,16 @@ function buildFacts(exec: Execution): Fact[] {
   if (exec.patchFiles && exec.patchFiles.length > 0) {
     facts.push({ label: 'Files', value: exec.patchFiles.join(', ') });
   }
+  facts.push({
+    label: 'Evidence',
+    value: (
+      <ul className="space-y-0.5">
+        {describeEvidence(exec).map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+    ),
+  });
   return facts;
 }
 

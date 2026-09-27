@@ -317,6 +317,9 @@ function normalizeRolloutValue(
       type,
       payload: sanitizePayload(type, payload),
     };
+    if (typeof value.ordinal === 'number' && Number.isInteger(value.ordinal)) {
+      record.ordinal = value.ordinal;
+    }
     if (isRecord(value.metadata)) {
       record.metadata = value.metadata;
     }

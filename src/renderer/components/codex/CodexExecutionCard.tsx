@@ -24,6 +24,7 @@ import { ChevronRight } from 'lucide-react';
 
 import { CodexExecutionDetails } from './CodexExecutionDetails';
 import {
+  evidenceBadge,
   executionLabel,
   executionSummary,
   generationLabel,
@@ -61,6 +62,10 @@ function contextParts(exec: Execution): string[] {
   const generation = generationLabel(exec);
   if (generation) {
     parts.push(generation);
+  }
+  const badge = evidenceBadge(exec);
+  if (badge) {
+    parts.push(badge.label);
   }
   if (exec.patchFiles && exec.patchFiles.length > 0) {
     parts.push(exec.patchFiles.join(', '));

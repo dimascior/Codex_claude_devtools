@@ -15,11 +15,15 @@
  *
  * Usage (from the repository root):
  *   pnpm exec tsx scripts/codex-rollout-survey.ts [--max-files N | --all] [--sessions DIR] [--out FILE]
+ *   pnpm exec tsx scripts/codex-rollout-survey.ts --from-transcripts DIR [--out FILE]
  *
- *   --max-files N   survey the N most recently written rollouts (default 200)
- *   --all           survey every rollout
- *   --sessions DIR  sessions directory (default: $CODEX_HOME/sessions, else ~/.codex/sessions)
- *   --out FILE      report path (default: codex-survey.md in the OS temp directory)
+ *   --max-files N           survey the N most recently written rollouts (default 200)
+ *   --all                   survey every rollout
+ *   --sessions DIR          sessions directory (default: $CODEX_HOME/sessions, else ~/.codex/sessions)
+ *   --from-transcripts DIR  survey sanitized transcripts (scripts/codex-rollout-transcript.ts
+ *                           output, e.g. tests/fixtures/codex/real-observed) instead of rollouts;
+ *                           real line numbers are kept
+ *   --out FILE              report path (default: codex-survey.md in the OS temp directory)
  */
 
 import { execFileSync } from 'child_process';
@@ -42,6 +46,7 @@ import { CodexScanner, type RolloutFile } from '../src/main/providers/codex/Code
 import { outputBodyToText, parseToolOutput } from '../src/main/providers/codex/execOutput';
 
 import type { AgentSessionList, Execution, TimelineEntry } from '../src/main/domain';
+import type { CodexRolloutRecord } from '../src/main/providers/codex/types';
 import type { Readable } from 'stream';
 
 const DEFAULT_MAX_FILES = 200;
@@ -106,7 +111,42 @@ const RENDERED_TURN_ITEM_TYPES = new Set([
   'CommandExecution',
   'FileChange',
   'McpToolCall',
+  'WebSearch',
+  'Extension',
 ]);
+const RENDERED_RECORD_TYPES = new Set([
+  'session_meta',
+  'response_item',
+  'event_msg',
+  'turn_context',
+  'compacted',
+]);
+/** Types recognized and deliberately not rendered (docs/codex-real-validation/parser-findings.md). */
+const NOT_RENDERED_BY_DESIGN = new Set([
+  'token_usage_record',
+  'world_state',
+  'inter_agent_communication_metadata',
+  'thread_settings_applied',
+  'ContextCompaction',
+  'SubAgentActivity',
+  'CollabAgentToolCall',
+]);
+
+/**
+ * Messages the Codex harness writes instead of a status header
+ * (codex-rs core/src: hook_runtime.rs, tools/parallel.rs, unified_exec).
+ * Only the form is reported, never the rest of the text.
+ */
+const KNOWN_MESSAGE_FORMS: [RegExp, string][] = [
+  [/^Command blocked by PreToolUse hook:/, 'Command blocked by PreToolUse hook: …'],
+  [/^Tool call blocked by PreToolUse hook:/, 'Tool call blocked by PreToolUse hook: …'],
+  [/^Wall time:? [\d.]+ seconds?\r?\naborted by user/, 'Wall time: … / aborted by user'],
+  [/^aborted by user after /, 'aborted by user after …'],
+  [/^write_stdin failed:/, 'write_stdin failed: …'],
+  [/^execution error:/, 'execution error: …'],
+  [/^apply_patch verification failed/, 'apply_patch verification failed …'],
+  [/rejected by user/, '… rejected by user'],
+];
 
 /** Tools whose outputs carry an exec header (exit code, process or cell state). */
 const EXEC_TOOLS = new Set([
@@ -159,6 +199,8 @@ const ANOMALY_NOTES: Record<string, string> = {
   'wait not linked to a cell': 'A code-mode wait whose cell could not be found.',
   'stdin write without a process id': 'A write_stdin call without a session id.',
   'finished without a duration': 'A finished execution with no reported or observed duration.',
+  'recorded item not linked to a call or cell':
+    'An item record (item_completed, *_end) whose id matches no call and that no single running code cell could claim.',
   'no timestamp': 'An execution without any timestamp.',
   'reader line count differs from a plain line split':
     'The app reader and a plain line split saw a different number of lines.',
@@ -289,6 +331,22 @@ function enumValue(value: unknown): string {
       : identifier(first);
   }
   return typeof value;
+}
+
+/** A type name, annotated when the viewer does not render it. */
+function typeLabel(type: string, rendered: boolean): string {
+  if (rendered) return type;
+  return NOT_RENDERED_BY_DESIGN.has(type)
+    ? `${type} (not rendered, by design)`
+    : `${type} (not rendered)`;
+}
+
+function knownMessageForm(text: string): string {
+  const head = text.trimStart().slice(0, 400);
+  for (const [pattern, form] of KNOWN_MESSAGE_FORMS) {
+    if (pattern.test(head)) return form;
+  }
+  return '(none of the known forms)';
 }
 
 function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
@@ -502,7 +560,12 @@ function surveyLine(line: string, where: Where, context: FileContext, survey: Su
 
   survey
     .t('recordTypes')
-    .add(KNOWN_RECORD_TYPES.has(record.type) ? record.type : `${record.type} (unknown)`, where);
+    .add(
+      KNOWN_RECORD_TYPES.has(record.type)
+        ? typeLabel(record.type, RENDERED_RECORD_TYPES.has(record.type))
+        : `${record.type} (unknown)`,
+      where
+    );
   if (record.metadata) {
     survey.t('metadataKeys').add(keySet(record.metadata), where);
   }
@@ -714,12 +777,15 @@ function surveyOutput(
   if (!parsed.recognized) {
     survey.t('unrecognizedHeaders').add(`${tool} → ${headerSkeleton(text)}`, where);
   }
+  if (!parsed.recognized || parsed.body.startsWith('aborted by user')) {
+    survey.t('knownMessages').add(`${tool} → ${knownMessageForm(text)}`, where);
+  }
 }
 
 function surveyEvent(event: Record<string, unknown>, where: Where, survey: Survey): void {
   const type = typeof event.type === 'string' ? enumValue(event.type) : '(no type)';
   const rendered = RENDERED_EVENT_TYPES.has(type);
-  survey.t('eventTypes').add(rendered ? type : `${type} (not rendered)`, where);
+  survey.t('eventTypes').add(typeLabel(type, rendered), where);
   if (rendered && type !== 'item_completed') {
     survey.t('eventKeys').add(`${type} ${keySet(event)}`, where);
   }
@@ -729,9 +795,7 @@ function surveyEvent(event: Record<string, unknown>, where: Where, survey: Surve
   if (type === 'item_completed' && isRecord(event.item)) {
     const item = event.item;
     const itemType = typeof item.type === 'string' ? enumValue(item.type) : '(no type)';
-    survey
-      .t('turnItems')
-      .add(RENDERED_TURN_ITEM_TYPES.has(itemType) ? itemType : `${itemType} (not rendered)`, where);
+    survey.t('turnItems').add(typeLabel(itemType, RENDERED_TURN_ITEM_TYPES.has(itemType)), where);
     survey.t('turnItemKeys').add(`${itemType} ${keySet(item)}`, where);
     if (itemType === 'CommandExecution') {
       survey
@@ -783,10 +847,67 @@ async function surveyNormalized(
   for (const entry of session.timeline) {
     surveyEntry(entry, { file: file.sessionId, line: entry.lineNumber }, survey);
   }
+  const context: ExecutionSurveyContext = {
+    file: file.sessionId,
+    cliVersion: enumValue(session.metadata.cliVersion),
+    turnClosures: turnClosures(records),
+    lastLine: records.length > 0 ? records[records.length - 1].lineNumber : 0,
+  };
   for (const exec of session.executions) {
-    surveyExecution(exec, undefined, file.sessionId, survey);
+    surveyExecution(exec, undefined, context, survey);
   }
   return { counted: read.records.length + read.malformedLines + (read.tail ? 1 : 0) };
+}
+
+interface ExecutionSurveyContext {
+  file: string;
+  cliVersion: string;
+  /** turn id → how the turn ended */
+  turnClosures: Map<string, 'completed' | 'aborted'>;
+  lastLine: number;
+}
+
+function turnClosures(
+  records: readonly CodexRolloutRecord[]
+): Map<string, 'completed' | 'aborted'> {
+  const closures = new Map<string, 'completed' | 'aborted'>();
+  for (const record of records) {
+    if (record.type !== 'event_msg') continue;
+    const turnId = str(record.payload.turn_id);
+    if (!turnId) continue;
+    const type = record.payload.type;
+    if (type === 'task_complete' || type === 'turn_complete') closures.set(turnId, 'completed');
+    if (type === 'turn_aborted') closures.set(turnId, 'aborted');
+  }
+  return closures;
+}
+
+/**
+ * Structural family of a call that never got a result.
+ */
+function missingResultFamily(exec: Execution, context: ExecutionSurveyContext): string {
+  if (exec.outputCount) return 'output recorded without a final status';
+  if (!exec.turnId) return 'no turn id on the call';
+  const closure = context.turnClosures.get(exec.turnId);
+  if (closure === 'completed') return 'turn completed without the output (persistence gap)';
+  if (closure === 'aborted') return 'turn aborted (should read interrupted)';
+  return 'turn never closed: rollout ended mid-turn';
+}
+
+/** Evidence class of a nested execution, or of an unlinked item record. */
+function evidenceClass(exec: Execution): string {
+  const { code, observed, result, cellLink, callSiteLink } = exec.evidence;
+  if (code && !observed && !result) return 'script call site only (static analysis)';
+  if (observed?.kind === 'inventory' && !result)
+    return 'listed as attempted (inventory), no result';
+  if (callSiteLink?.method === 'content') return 'script call site + recorded item (content link)';
+  if (cellLink?.method === 'turn_window') return 'recorded item attributed by turn and order';
+  if (cellLink?.method === 'unresolved') {
+    const what =
+      observed?.kind === 'item' ? 'recorded item' : `${observed?.kind ?? 'unknown'} record`;
+    return `${what}, not linked: ${cellLink.detail ?? ''}`;
+  }
+  return 'other';
 }
 
 function surveyEntry(entry: TimelineEntry, where: Where, survey: Survey): void {
@@ -816,6 +937,10 @@ function surveyEntry(entry: TimelineEntry, where: Where, survey: Survey): void {
         where
       );
       break;
+    case 'inherited_context':
+      t.add('inherited context (subagent)', where);
+      survey.t('sessions').add('subagent with inherited parent history', where);
+      break;
     case 'execution':
       break;
   }
@@ -824,11 +949,18 @@ function surveyEntry(entry: TimelineEntry, where: Where, survey: Survey): void {
 function surveyExecution(
   exec: Execution,
   parent: Execution | undefined,
-  file: string,
+  context: ExecutionSurveyContext,
   survey: Survey
 ): void {
-  const where: Where = { file, line: exec.lineNumber };
-  const anomalies = survey.t('anomalies');
+  const where: Where = { file: context.file, line: exec.lineNumber };
+  const tallies = survey.t('anomalies');
+  const anomalies = {
+    add: (name: string, at: Where): void => {
+      tallies.add(name, at);
+      survey.t('anomalyKinds').add(`${name} · ${exec.kind}`, at);
+      survey.t('anomalyVersions').add(`${name} · cli ${context.cliVersion}`, at);
+    },
+  };
   const detail = exec.statusDetail ?? '';
   const finished = exec.status === 'completed' || exec.status === 'failed';
 
@@ -844,6 +976,19 @@ function surveyExecution(
   }
   if (exec.status === 'unknown' && detail === 'No result was recorded') {
     anomalies.add('call without a result', where);
+    survey.t('missingResults').add(missingResultFamily(exec, context), where);
+  }
+  if (
+    !parent &&
+    exec.evidence.observed?.kind === 'item' &&
+    exec.evidence.cellLink?.method === 'unresolved'
+  ) {
+    anomalies.add('recorded item not linked to a call or cell', where);
+  }
+  if (parent || exec.evidence.cellLink) {
+    survey
+      .t('evidence')
+      .add(`${parent ? 'nested' : 'top-level'} ${exec.kind}: ${evidenceClass(exec)}`, where);
   }
   if (detail.startsWith('Process was still running when the log ended')) {
     anomalies.add('process never seen exiting', where);
@@ -873,20 +1018,25 @@ function surveyExecution(
   }
 
   if (exec.kind === 'code_cell') {
-    const complete =
-      exec.childrenComplete === undefined
-        ? ''
-        : exec.childrenComplete
-          ? ' · complete'
-          : ' · incomplete';
-    survey.t('codeCellResults').add(`children ${exec.childrenSource ?? 'none'}${complete}`, where);
-    for (const child of exec.children ?? []) {
+    const children = exec.children ?? [];
+    const recorded = children.filter((child) => child.evidence.result).length;
+    const scriptOnly = children.filter(
+      (child) => child.evidence.code && !child.evidence.observed && !child.evidence.result
+    ).length;
+    const shape =
+      children.length === 0
+        ? 'no nested operations'
+        : [recorded > 0 ? 'recorded' : '', scriptOnly > 0 ? 'script-only' : '']
+            .filter(Boolean)
+            .join(' + ') || 'other';
+    survey.t('codeCellResults').add(`cells with ${shape}`, where);
+    for (const child of children) {
       const exit = child.exitCode === undefined ? '' : ' · exit code';
       survey.t('codeCellResults').add(`child ${child.kind} → ${child.status}${exit}`, where);
     }
   }
   for (const child of exec.children ?? []) {
-    surveyExecution(child, exec, file, survey);
+    surveyExecution(child, exec, context, survey);
   }
 }
 
@@ -1101,6 +1251,15 @@ function renderReport(input: ReportInput): string {
     out.push('None.', '');
   }
   out.push(...tallyTable(t('anomalies'), 'Anomalies', { examples: 'all', notes: ANOMALY_NOTES }));
+  out.push(...tallyTable(t('anomalyKinds'), 'Anomalies by execution kind'));
+  out.push(
+    ...tallyTable(t('anomalyVersions'), 'Anomalies by CLI version (session_meta.cli_version)')
+  );
+  out.push(
+    ...tallyTable(t('missingResults'), 'Calls without a result, by structural family', {
+      examples: 'all',
+    })
+  );
   out.push(...tallyTable(t('errors'), 'Files that could not be surveyed', { examples: 'all' }));
   out.push(
     ...tallyTable(t('lines'), 'Lines the reader skipped or did not recognize', { examples: 'all' })
@@ -1110,6 +1269,11 @@ function renderReport(input: ReportInput): string {
   out.push(...tallyTable(t('executions'), 'Executions (kind → status)'));
   out.push(...tallyTable(t('generations'), 'Call generations'));
   out.push(...tallyTable(t('codeCellResults'), 'Code cells and their nested calls'));
+  out.push(
+    ...tallyTable(t('evidence'), 'Evidence behind nested and unlinked executions', {
+      examples: 'flagged',
+    })
+  );
   out.push(...tallyTable(t('timeline'), 'Other timeline entries'));
   out.push(...tallyTable(t('sessions'), 'Surveyed sessions'));
 
@@ -1148,6 +1312,14 @@ function renderReport(input: ReportInput): string {
     })
   );
 
+  out.push(
+    ...tallyTable(
+      t('knownMessages'),
+      'Harness messages in outputs without a status header (form only)',
+      { examples: 'all' }
+    )
+  );
+
   out.push('## Events', '');
   out.push(...tallyTable(t('eventTypes'), 'event_msg types', { examples: 'flagged' }));
   out.push(...tallyTable(t('eventKeys'), 'Rendered event fields'));
@@ -1166,6 +1338,7 @@ interface Options {
   maxFiles: number;
   all: boolean;
   sessionsDir?: string;
+  transcriptsDir?: string;
   outPath?: string;
 }
 
@@ -1195,13 +1368,16 @@ function parseArgs(argv: string[]): Options {
       case '--sessions':
         options.sessionsDir = path.resolve(value());
         break;
+      case '--from-transcripts':
+        options.transcriptsDir = path.resolve(value());
+        break;
       case '--out':
         options.outPath = path.resolve(value());
         break;
       case '--help':
       case '-h':
         console.log(
-          'Usage: pnpm exec tsx scripts/codex-rollout-survey.ts [--max-files N | --all] [--sessions DIR] [--out FILE]'
+          'Usage: pnpm exec tsx scripts/codex-rollout-survey.ts [--max-files N | --all] [--sessions DIR | --from-transcripts DIR] [--out FILE]'
         );
         process.exit(0);
         break;
@@ -1210,6 +1386,50 @@ function parseArgs(argv: string[]): Options {
     }
   }
   return options;
+}
+
+/**
+ * Rebuild rollouts from sanitized transcripts (one JSON record per line with
+ * its real `line` number) into a temporary sessions directory. Blank lines
+ * keep every record on its real line, so report locations match the source.
+ */
+function sessionsFromTranscripts(transcriptsDir: string): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-survey-transcripts-'));
+  const sessionsDir = path.join(root, 'sessions');
+  const files = fs.readdirSync(transcriptsDir).filter((name) => name.endsWith('.jsonl'));
+  for (const [index, name] of files.entries()) {
+    const lines: string[] = [];
+    let rolloutFile: string | undefined;
+    let firstTimestamp: string | undefined;
+    let lastTimestamp: string | undefined;
+    for (const raw of fs.readFileSync(path.join(transcriptsDir, name), 'utf8').split('\n')) {
+      if (!raw.trim()) continue;
+      const entry = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof entry.rollout_file === 'string') rolloutFile = entry.rollout_file;
+      if (typeof entry.type !== 'string' || typeof entry.line !== 'number') continue;
+      const { line, bytes: _bytes, ...record } = entry;
+      if (typeof record.timestamp === 'string') {
+        firstTimestamp ??= record.timestamp;
+        lastTimestamp = record.timestamp;
+      }
+      while (lines.length < line - 1) lines.push('');
+      lines[line - 1] = JSON.stringify(record);
+    }
+    const stamp = (firstTimestamp ?? '2000-01-01T00:00:00.000Z').slice(0, 19);
+    const fileName =
+      rolloutFile && /^rollout-.+\.jsonl$/.test(rolloutFile)
+        ? rolloutFile
+        : `rollout-${stamp.replace(/:/g, '-')}-00000000-0000-4000-8000-${String(index).padStart(12, '0')}.jsonl`;
+    const dayDir = path.join(sessionsDir, stamp.slice(0, 4), stamp.slice(5, 7), stamp.slice(8, 10));
+    fs.mkdirSync(dayDir, { recursive: true });
+    const target = path.join(dayDir, fileName);
+    fs.writeFileSync(target, `${lines.join('\n')}\n`);
+    // A transcript is a record of the past: date the file by its last record
+    // so it is not mistaken for a live rollout.
+    const modified = new Date(lastTimestamp ?? 0);
+    fs.utimesSync(target, modified, modified);
+  }
+  return sessionsDir;
 }
 
 function describeSessionsDir(sessionsDir: string, explicit: boolean): string {
@@ -1224,7 +1444,9 @@ function describeSessionsDir(sessionsDir: string, explicit: boolean): string {
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  const sessionsDir = options.sessionsDir ?? getCodexSessionsPath();
+  const sessionsDir = options.transcriptsDir
+    ? sessionsFromTranscripts(options.transcriptsDir)
+    : (options.sessionsDir ?? getCodexSessionsPath());
   const survey = new Survey();
   const scanner = new CodexScanner(sessionsDir);
 
@@ -1249,7 +1471,9 @@ async function main(): Promise<void> {
   process.stderr.write('\n');
 
   const report = renderReport({
-    sessionsDirOrigin: describeSessionsDir(sessionsDir, options.sessionsDir !== undefined),
+    sessionsDirOrigin: options.transcriptsDir
+      ? 'rebuilt from sanitized transcripts (--from-transcripts); strings are placeholders'
+      : describeSessionsDir(sessionsDir, options.sessionsDir !== undefined),
     list,
     scanMs,
     files,

@@ -29,7 +29,8 @@ test/
 │   │   ├── configValidation.test.ts
 │   │   └── guards.test.ts
 │   ├── providers/
-│   │   └── codex/       # Rollout parsing, normalization, output/command parsing, session service
+│   │   └── codex/       # Rollout parsing, normalization, output/command parsing, session service,
+│   │                    # realObserved (real fixtures), evidenceLinking (linking rules)
 │   ├── services/        # Service tests
 │   │   ├── analysis/    (ChunkBuilder)
 │   │   ├── discovery/   (ProjectPathResolver, SessionSearcher)
@@ -81,4 +82,5 @@ test/
 
 ## Test Data
 Test fixtures use real JSONL session data from `~/.claude/projects/`.
-Codex fixtures in `test/fixtures/codex/` are synthetic rollouts in the current envelope format (plus one legacy file).
+Codex fixtures in `test/fixtures/codex/` are synthetic rollouts in the current envelope format (plus one legacy file): regression tests, not compatibility proof.
+Sanitized records from real Codex rollouts live in `tests/fixtures/codex/real-observed/` (see `docs/codex-real-validation/`); they take precedence over synthetic fixtures. Never alter their topology to make a test pass.

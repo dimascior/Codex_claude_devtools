@@ -1,8 +1,10 @@
 /**
- * CodexNestedExecutions - Tree of the operations a code-mode cell dispatched.
+ * CodexNestedExecutions - Tree of a code-mode cell's nested operations.
  *
- * A code cell is one model-visible call; the nested calls are what actually
- * ran. Each row expands to that call's details.
+ * Rows come from different evidence: call sites found in the cell script
+ * (static analysis, nothing proves they ran), calls Codex listed as attempted,
+ * and executions Codex recorded while the cell was running. Each row carries a
+ * badge saying which, and expands to its details.
  */
 
 import { useState } from 'react';
@@ -16,7 +18,7 @@ import {
 import { formatDuration } from '@renderer/utils/formatters';
 
 import { CodexExecutionDetails } from './CodexExecutionDetails';
-import { executionLabel, executionSummary, KIND_ICONS } from './codexFormatting';
+import { evidenceBadge, executionLabel, executionSummary, KIND_ICONS } from './codexFormatting';
 import { CodexStatusBadge } from './CodexStatusBadge';
 
 import type { Execution } from '@shared/types';
@@ -25,13 +27,38 @@ interface CodexNestedExecutionsProps {
   cell: Execution;
 }
 
-function describeSource(cell: Execution): string {
-  if (cell.childrenSource === 'recorded') {
-    return cell.childrenComplete
-      ? 'recorded by Codex · complete inventory'
-      : 'recorded by Codex · inventory may be partial';
+/**
+ * "3 recorded by Codex · 1 matched to the script by command · 2 found in the script only".
+ */
+function describeEvidence(cell: Execution): string {
+  const children = cell.children ?? [];
+  let recorded = 0;
+  let linked = 0;
+  let scriptOnly = 0;
+  let attempted = 0;
+  for (const child of children) {
+    const { code, observed, result } = child.evidence;
+    if (code && result) linked++;
+    else if (code && !observed) scriptOnly++;
+    else if (observed?.kind === 'inventory' && !result) attempted++;
+    else if (result) recorded++;
   }
-  return 'from static analysis of the cell script';
+  const parts: string[] = [];
+  if (recorded + linked > 0) {
+    parts.push(`${recorded + linked} recorded by Codex`);
+  }
+  if (linked > 0) {
+    parts.push(`${linked} matched to the script by command`);
+  }
+  if (attempted > 0) {
+    parts.push(
+      `${attempted} listed as attempted${cell.childrenComplete ? ' (complete list)' : ''}, no result`
+    );
+  }
+  if (scriptOnly > 0) {
+    parts.push(`${scriptOnly} found in the script only`);
+  }
+  return parts.join(' · ');
 }
 
 /**
@@ -55,7 +82,8 @@ export const CodexNestedExecutions = ({ cell }: CodexNestedExecutionsProps): Rea
   return (
     <div>
       <div className="mb-1 text-[11px]" style={{ color: COLOR_TEXT_MUTED }}>
-        {children.length} nested call{children.length === 1 ? '' : 's'} · {describeSource(cell)}
+        {children.length} nested operation{children.length === 1 ? '' : 's'} ·{' '}
+        {describeEvidence(cell)}
       </div>
       <ul>
         {children.map((child, index) => {
@@ -63,6 +91,7 @@ export const CodexNestedExecutions = ({ cell }: CodexNestedExecutionsProps): Rea
           const Icon = KIND_ICONS[child.kind];
           const isExpanded = expandedId === child.id;
           const cwd = relativeCwd(child, cell);
+          const badge = evidenceBadge(child);
           return (
             <li key={child.id}>
               <button
@@ -87,6 +116,19 @@ export const CodexNestedExecutions = ({ cell }: CodexNestedExecutionsProps): Rea
                     style={{ color: COLOR_TEXT_MUTED }}
                   >
                     in {cwd}
+                  </span>
+                )}
+                {badge && (
+                  <span
+                    className="shrink-0 rounded px-1 font-sans text-[10px]"
+                    style={{
+                      backgroundColor: 'var(--tag-bg)',
+                      border: '1px solid var(--tag-border)',
+                      color: 'var(--tag-text)',
+                    }}
+                    title={badge.title}
+                  >
+                    {badge.label}
                   </span>
                 )}
                 <CodexStatusBadge execution={child} parentRunning={cell.status === 'running'} />

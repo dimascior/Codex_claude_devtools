@@ -132,6 +132,22 @@ export const CodexSessionHeader = ({
             <span style={{ color: COLOR_TEXT_MUTED }}> ({stats.nested} nested)</span>
           )}
         </span>
+        {stats.scriptOnly > 0 && (
+          <span
+            style={{ color: COLOR_TEXT_MUTED }}
+            title="Nested calls found by static analysis of code cells, with no provider record"
+          >
+            {stats.scriptOnly} script call site{stats.scriptOnly === 1 ? '' : 's'} not recorded
+          </span>
+        )}
+        {stats.unattributed > 0 && (
+          <span
+            style={{ color: COLOR_TEXT_MUTED }}
+            title="Executions Codex recorded that could not be linked to a call or code cell"
+          >
+            {stats.unattributed} unlinked record{stats.unattributed === 1 ? '' : 's'}
+          </span>
+        )}
         {problems > 0 && (
           <span style={{ color: 'var(--tool-result-error-text)' }}>
             {stats.failed} failed

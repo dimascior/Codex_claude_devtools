@@ -15,6 +15,7 @@ import * as path from 'path';
 import { parseCodexEvent } from './CodexEventParser';
 import {
   type CodexSessionMetadata,
+  isInheritedRecord,
   isInjectedContext,
   parseSessionMeta,
   projectKeyForCwd,
@@ -273,6 +274,11 @@ class HeadExtractor {
   /** Returns true once nothing more is needed. */
   accept(record: CodexRolloutRecord): boolean {
     const { payload } = record;
+    // A subagent's title and model come from its own history, not the copy
+    // of its parent's history that precedes it.
+    if (isInheritedRecord(record.ordinal, this.metadata)) {
+      return false;
+    }
     if (record.type === 'session_meta' && !this.haveMetadata) {
       this.metadata = parseSessionMeta(payload);
       this.haveMetadata = true;
@@ -359,6 +365,8 @@ export function buildSessionSummary(
     parentThreadId: metadata.parentThreadId,
     agentNickname: metadata.agentNickname,
     agentRole: metadata.agentRole,
+    inheritedRecordCount:
+      metadata.historyStartOrdinal !== undefined ? metadata.historyStartOrdinal - 1 : undefined,
     error: head.error,
   };
 }

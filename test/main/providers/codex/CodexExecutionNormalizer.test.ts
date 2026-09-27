@@ -92,7 +92,7 @@ describe('normalizeCodexRollout — function-call and local_shell generations', 
       exitCode: 0,
       status: 'completed',
       durationMs: 400,
-      durationReported: true,
+      durationSource: 'reported',
       output: ' M src/lib.rs\n?? notes.md\n',
       timestamp: '2026-09-23T22:41:03.000Z',
       completedAt: '2026-09-23T22:41:03.400Z',
@@ -184,9 +184,12 @@ describe('normalizeCodexRollout — code mode', () => {
       durationMs: 38200,
       cellId: 'cell-7',
       args: { yield_time_ms: 30000 },
-      childrenSource: 'recorded',
       childrenComplete: true,
     });
+    // The inventory (executed_tool_calls) replaced the script's call sites.
+    expect(cell.children?.every((child) => child.evidence.observed?.kind === 'inventory')).toBe(
+      true
+    );
     expect(cell.output).toContain('test result: ok. 42 passed');
     expect(cell.children?.map((child) => child.command)).toEqual([
       'git status --short',
@@ -201,14 +204,15 @@ describe('normalizeCodexRollout — code mode', () => {
       name: 'exec_command',
       cwd: '/home/dev/src/sample-app/crates',
       status: 'unknown',
+      evidence: { observed: { kind: 'inventory', recordType: 'executed_tool_calls' } },
     });
+    expect(cell.children?.[2].evidence.result).toBeUndefined();
   });
 
   it('falls back to script analysis and resolves a yielded cell through wait', async () => {
     const list = executions((await normalizeFixture('code-mode.jsonl')).timeline);
     const cell = byId(list, 'call_cell_2');
     expect(cell).toMatchObject({
-      childrenSource: 'script',
       cellId: 'cell-8',
       status: 'failed',
       completedAt: '2026-09-24T09:01:20.000Z',
@@ -217,6 +221,13 @@ describe('normalizeCodexRollout — code mode', () => {
       ['exec_command', '‹cmd›'],
       ['apply_patch', 'apply_patch'],
     ]);
+    // Script call sites are code evidence only: no provider record, no status.
+    for (const child of cell.children ?? []) {
+      expect(child.evidence.code).toBeDefined();
+      expect(child.evidence.observed).toBeUndefined();
+      expect(child.evidence.result).toBeUndefined();
+      expect(child.status).toBe('unknown');
+    }
     expect(cell.children?.[1].patchFiles).toEqual(['notes.md']);
 
     expect(byId(list, 'call_wait_3')).toMatchObject({
@@ -234,19 +245,30 @@ describe('normalizeCodexRollout — code mode', () => {
       summary: [],
       encrypted: true,
     });
-    expect(stats).toMatchObject({ total: 3, nested: 5, commands: 4 });
+    // cell 1 lists 3 commands in its recorded inventory; cell 2's script call
+    // sites (1 command, 1 patch) have no provider record and are not counted.
+    expect(stats).toMatchObject({ total: 3, nested: 5, commands: 3, scriptOnly: 2 });
   });
 });
 
 describe('normalizeCodexRollout — paginated rollouts', () => {
-  it('attaches per-command results to recorded nested calls', async () => {
+  it('attributes exec- items to the only running cell and links them to call sites by command', async () => {
     const { timeline } = await normalizeFixture('paginated.jsonl');
     const cell = byId(executions(timeline), 'call_cell_9');
     expect(cell.children?.map((child) => [child.command, child.exitCode, child.status])).toEqual([
       ['npm run lint', 0, 'completed'],
       ['npm test', 1, 'failed'],
     ]);
-    expect(cell.children?.[0]).toMatchObject({ durationMs: 2500, durationReported: true });
+    expect(cell.children?.[0]).toMatchObject({
+      durationMs: 2500,
+      durationSource: 'reported',
+      evidence: {
+        observed: { kind: 'item', recordType: 'item_completed/CommandExecution', lineNumber: 7 },
+        result: { kind: 'item', lineNumber: 7 },
+        cellLink: { method: 'turn_window' },
+        callSiteLink: { method: 'content' },
+      },
+    });
   });
 
   it('adds user shell commands and turn aborts, using item_completed user messages', async () => {

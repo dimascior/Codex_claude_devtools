@@ -8,14 +8,21 @@
  * 2. Direct shell: the Responses API `local_shell_call` item (argv action).
  * 3. Code mode: a `custom_tool_call` named `exec` whose JavaScript input
  *    dispatches nested tools (`await tools.exec_command({...})`). The cell is
- *    one model-visible call; its nested calls are the operations that actually
- *    ran, so they are kept as children rather than flattened.
+ *    one model-visible call; its nested operations are kept as children.
  *
- * Results are correlated by `call_id` (`function_call_output`,
- * `custom_tool_call_output`, `tool_search_output`). Exit codes and timings are
- * recovered from the output headers (see execOutput.ts); paginated rollouts
- * additionally persist per-command results (`item_completed` CommandExecution),
- * which are applied to the matching top-level or nested execution.
+ * Evidence is kept by class (see `ExecutionEvidence`) and linked only as far
+ * as the persisted records allow (docs/codex-real-validation):
+ * - Calls and outputs are joined by `call_id` (explicit).
+ * - Harness item records (`item_completed`, legacy `*_end` events) are applied
+ *   to the call whose id they carry (explicit).
+ * - Items dispatched from a code cell carry fresh `exec-<uuid>` ids that match
+ *   no call, and real rollouts record no cell id on them. Such an item is
+ *   attached to a cell only when exactly one cell of the item's turn is
+ *   running at that point of the rollout (turn-scoped, record order).
+ *   Otherwise it stays a top-level, unattributed recorded execution.
+ * - A cell's script call sites (static analysis) are children without a
+ *   result. A call site is linked to a recorded item only when their
+ *   normalized command text is identical and unique on both sides (content).
  */
 
 import { isDynamicExpression, parseCodeCell, renderScriptValue } from './codeCell';
@@ -29,9 +36,15 @@ import {
 } from './execOutput';
 import { describeArgv, executableName, shellDisplayName } from './shellCommand';
 
-import type { CodexCommandResult } from './CodexEventParser';
+import type { CodexItemEnvelope, CodexRecordedItem } from './CodexEventParser';
 import type { CodexRolloutRecord } from './types';
-import type { Execution, ExecutionKind, ExecutionStatus, NestedCallSource } from '@main/domain';
+import type {
+  EvidenceLink,
+  Execution,
+  ExecutionKind,
+  ExecutionStatus,
+  RecordEvidence,
+} from '@main/domain';
 
 /** Per-execution output cap for transport to the renderer. */
 const MAX_OUTPUT_CHARS = 256 * 1024;
@@ -40,6 +53,12 @@ const MAX_INPUT_CHARS = 128 * 1024;
 
 const TRUNCATED_ARGS_KEY = '_codex_executed_tool_call_truncated';
 const RAW_ARGS_KEY = '_codex_executed_tool_call_raw';
+
+/**
+ * Codex names calls dispatched from a code-mode cell `exec-<uuid>`
+ * (`format!("{PUBLIC_TOOL_NAME}-{}", Uuid::new_v4())`, PUBLIC_TOOL_NAME = "exec").
+ */
+const CODE_MODE_ITEM_ID_PREFIX = 'exec-';
 
 /** Turn-scoped context supplied by the normalizer. */
 export interface ExecutionContext {
@@ -61,10 +80,22 @@ interface Classified {
   patchFiles?: string[];
 }
 
+interface BaseInit {
+  callId: string | undefined;
+  kind: ExecutionKind;
+  source: string;
+  name: string;
+  /** Turn id recorded on the item itself (preferred over the context's) */
+  turnId?: string;
+  observed: RecordEvidence;
+}
+
 export class CodexExecutionParser {
   /** Latest execution registered for each provider call id */
   private readonly byCallId = new Map<string, Execution>();
-  /** Top-level executions in call order */
+  /** Executions built from item records, by item id */
+  private readonly byItemId = new Map<string, Execution>();
+  /** Top-level executions in record order */
   private readonly topLevel: Execution[] = [];
   /** Unified exec sessions still running → the command that started them */
   private readonly processOrigins = new Map<string, Execution>();
@@ -72,9 +103,11 @@ export class CodexExecutionParser {
   private readonly cellsById = new Map<string, Execution>();
   /** Code-mode cells in call order */
   private readonly codeCells: Execution[] = [];
+  /** Cells whose running window is open: call recorded, no terminal state yet */
+  private readonly openCells = new Set<Execution>();
   private readonly usedIds = new Set<string>();
-  /** Executions whose output came from a per-command result and should be
-   * replaced by the model-visible output when it arrives */
+  /** Executions whose output came from an item record and should be replaced
+   * by the model-visible output when it arrives */
   private readonly provisionalOutputs = new WeakSet<Execution>();
   private syntheticCounter = 0;
 
@@ -120,8 +153,9 @@ export class CodexExecutionParser {
     context: ExecutionContext
   ): Execution | undefined {
     const callId = str(item.call_id);
+    const evidence = recordEvidence('output', String(item.type), record, callId);
     if (item.type === 'tool_search_output') {
-      return this.handleToolSearchOutput(record, item, context, callId);
+      return this.handleToolSearchOutput(record, item, context, callId, evidence);
     }
 
     let exec = callId ? this.byCallId.get(callId) : undefined;
@@ -132,129 +166,116 @@ export class CodexExecutionParser {
         kind: 'tool',
         source: String(item.type),
         name: str(item.name) ?? 'unknown',
+        turnId: passthroughTurnId(item),
+        observed: evidence,
       });
       exec.statusDetail = 'Call record not found in this rollout';
+      exec.evidence.cellLink = {
+        method: 'unresolved',
+        detail: 'Call record not found in this rollout',
+      };
       created = this.register(exec, callId);
     }
 
+    // An item record for the same call is the structured result; the output
+    // text is still shown, but does not override the item's outcome.
+    const itemResult = exec.evidence.result?.kind === 'item';
+    const itemStatus = itemResult ? exec.status : undefined;
     const { text, imageCount } = outputBodyToText(item.output);
     const parsed = parseToolOutput(text);
+    // Code-mode `notify()` injects extra outputs for the cell's call id; they
+    // carry the tool name and no status header, and the cell keeps running.
+    const intermediate =
+      exec.kind === 'code_cell' && typeof item.name === 'string' && !parsed.scriptStatus;
     this.appendOutput(exec, parsed.body, imageCount, record);
-    this.applyOutcome(exec, parsed, text, record);
+    if (!itemResult) {
+      exec.evidence.result = evidence;
+    }
+    this.applyOutcome(exec, parsed, text, record, intermediate);
+    if (itemStatus !== undefined && itemStatus !== 'running' && itemStatus !== 'unknown') {
+      exec.status = itemStatus;
+    }
+    if (created && exec.status === 'completed') {
+      // Without its call the kind is unknown, so is the outcome (e.g. a yield).
+      exec.status = 'unknown';
+    }
     this.applyPassthroughMetadata(exec, item, record, context);
     return created;
   }
 
   /**
-   * Apply a per-command result (paginated `CommandExecution` items or
-   * `exec_command_end` events). Returns a new top-level execution when the
-   * result belongs to no known call (e.g. a user shell command).
+   * Handle an execution recorded by the harness (`item_completed` items,
+   * legacy `*_end` events). Returns a new top-level execution when the item
+   * could not be linked to a call or attributed to a code cell.
    */
-  handleCommandResult(
-    result: CodexCommandResult,
+  handleRecordedItem(
+    item: CodexRecordedItem,
+    envelope: CodexItemEnvelope,
     record: CodexRolloutRecord,
     context: ExecutionContext
   ): Execution | undefined {
-    const direct = this.byCallId.get(result.callId);
-    if (direct) {
-      this.applyResult(direct, result, record);
+    const evidence = recordEvidence('item', envelope.recordType, record, item.id);
+
+    // Explicit: the item carries the id of a call in this rollout.
+    const call = this.byCallId.get(item.id);
+    if (call) {
+      this.applyItem(call, item, envelope, evidence, record);
+      return undefined;
+    }
+    // The same item recorded again.
+    const known = this.byItemId.get(item.id);
+    if (known) {
+      this.applyItem(known, item, envelope, evidence, record);
       return undefined;
     }
 
-    const display = result.command ? describeArgv(result.command).command : undefined;
-    const cell = this.findRunningCell();
-    if (cell && result.source !== 'user_shell') {
-      const child = findMatchingChild(cell, display);
-      if (child) {
-        this.applyResult(child, result, record);
+    const exec = this.executionFromItem(item, envelope, evidence, record, context);
+    this.byItemId.set(item.id, exec);
+
+    if (item.type === 'command' && item.source === 'user_shell') {
+      // Commands the user ran in the session have no model call to link to.
+      return this.register(exec, undefined);
+    }
+
+    if (item.id.startsWith(CODE_MODE_ITEM_ID_PREFIX)) {
+      if (exec.kind === 'command' || exec.kind === 'command_input' || exec.kind === 'patch') {
+        exec.generation = 'code_mode';
+      }
+      const running = [...this.openCells].filter(
+        (cell) => envelope.turnId !== undefined && cell.turnId === envelope.turnId
+      );
+      if (running.length === 1) {
+        this.attachRecordedChild(running[0].id, exec, {
+          method: 'turn_window',
+          detail:
+            'Recorded in the same turn while this was the only running code cell; no identifier links them',
+        });
         return undefined;
       }
-      const extra = this.commandFromResult(result, record, context, display);
-      extra.id = `${cell.id}:${(cell.children?.length ?? 0) + 1}`;
-      extra.parentId = cell.id;
-      extra.generation = 'code_mode';
-      cell.children = [...(cell.children ?? []), extra];
-      cell.childrenSource ??= 'recorded';
-      return undefined;
+      exec.evidence.cellLink = {
+        method: 'unresolved',
+        detail:
+          running.length === 0
+            ? 'Dispatched from a code cell, but no cell of its turn was running when it was recorded'
+            : `Dispatched from a code cell, but ${running.length} cells of its turn were running`,
+      };
+    } else {
+      exec.evidence.cellLink = {
+        method: 'unresolved',
+        detail: 'No call record with this id in the rollout',
+      };
     }
-
-    // Model calls whose result id differs from the call id: match recent commands by text.
-    if (display && result.source !== 'user_shell') {
-      const candidate = [...this.topLevel]
-        .reverse()
-        .slice(0, 50)
-        .find(
-          (exec) =>
-            exec.kind === 'command' &&
-            exec.exitCode === undefined &&
-            exec.command !== undefined &&
-            normalizeCommand(exec.command) === normalizeCommand(display)
-        );
-      if (candidate) {
-        this.applyResult(candidate, result, record);
-        return undefined;
-      }
-    }
-
-    return this.register(this.commandFromResult(result, record, context, display), result.callId);
-  }
-
-  private applyResult(
-    exec: Execution,
-    result: CodexCommandResult,
-    record: CodexRolloutRecord
-  ): void {
-    const hadOutput = exec.output !== undefined;
-    applyCommandResult(exec, result, record);
-    if (!hadOutput && exec.output !== undefined) {
-      this.provisionalOutputs.add(exec);
-    }
+    return this.register(exec, undefined);
   }
 
   /**
-   * Apply a patch result (`patch_apply_end` / FileChange item).
+   * A turn ended: its code cells can no longer be attributed new items.
    */
-  handlePatchResult(
-    callId: string,
-    success: boolean | undefined,
-    stderr?: string,
-    stdout?: string
-  ): void {
-    const exec = this.byCallId.get(callId);
-    if (!exec) {
-      return;
-    }
-    if (success === false) {
-      exec.status = 'failed';
-      exec.statusDetail = firstLine(stderr) ?? 'Patch failed to apply';
-    } else if (success === true && exec.status === 'running') {
-      exec.status = 'completed';
-    }
-    if (exec.output === undefined && (stdout || stderr)) {
-      exec.output = truncateText([stdout, stderr].filter(Boolean).join('\n'), MAX_OUTPUT_CHARS);
-    }
-  }
-
-  /**
-   * Apply an MCP call result (`mcp_tool_call_end` / McpToolCall item).
-   */
-  handleMcpResult(
-    callId: string,
-    durationMs: number | undefined,
-    isError: boolean,
-    error?: string
-  ): void {
-    const exec = this.byCallId.get(callId);
-    if (!exec) {
-      return;
-    }
-    if (durationMs !== undefined) {
-      exec.durationMs = durationMs;
-      exec.durationReported = true;
-    }
-    if (isError) {
-      exec.status = 'failed';
-      exec.statusDetail = error ?? exec.statusDetail;
+  closeTurn(turnId: string | undefined): void {
+    for (const cell of [...this.openCells]) {
+      if (!turnId || !cell.turnId || cell.turnId === turnId) {
+        this.openCells.delete(cell);
+      }
     }
   }
 
@@ -271,14 +292,19 @@ export class CodexExecutionParser {
         this.processOrigins.delete(exec.processId);
       }
     }
+    this.closeTurn(turnId);
   }
 
   /**
-   * Resolve executions that never received a result.
+   * Resolve executions that never received a result, and link script call
+   * sites to recorded items where the content match is unique.
    * @param inProgressAfterLine executions recorded after this line belong to a
    *   turn that is still running and keep their `running` status
    */
   finalize(inProgressAfterLine: number): void {
+    for (const cell of this.codeCells) {
+      this.linkCallSites(cell);
+    }
     for (const exec of this.allExecutions()) {
       if (exec.status !== 'running') continue;
       if (exec.lineNumber > inProgressAfterLine) continue;
@@ -287,13 +313,15 @@ export class CodexExecutionParser {
         exec.statusDetail = `Process was still running when the log ended (session ${exec.processId})`;
       } else if (exec.kind === 'code_cell' && exec.cellId) {
         exec.statusDetail = `Cell ${exec.cellId} was still running when the log ended`;
+      } else if (exec.outputCount) {
+        exec.statusDetail = 'Output recorded without a final status';
       } else {
         exec.statusDetail = 'No result was recorded';
       }
     }
   }
 
-  /** Top-level executions in call order. */
+  /** Top-level executions in record order. */
   getExecutions(): Execution[] {
     return this.topLevel;
   }
@@ -318,12 +346,15 @@ export class CodexExecutionParser {
           : undefined;
     const args = parseArguments(rawArguments);
     const classified = classifyTool(name, namespace, args, context.cwd);
+    const callId = str(item.call_id);
 
     const exec = this.base(record, context, {
-      callId: str(item.call_id),
+      callId,
       kind: classified.kind,
       source: 'function_call',
       name,
+      turnId: passthroughTurnId(item),
+      observed: recordEvidence('call', 'function_call', record, callId),
     });
     exec.namespace = namespace;
     exec.input = input !== undefined ? truncateText(input, MAX_INPUT_CHARS) : undefined;
@@ -348,12 +379,15 @@ export class CodexExecutionParser {
     const argv = stringArray(action.command) ?? [];
     const cwd = resolveWorkdir(context.cwd, str(action.working_directory));
     const isPatch = argv.length > 0 && executableName(argv[0]) === 'apply_patch';
+    const callId = str(item.call_id) ?? str(item.id);
 
     const exec = this.base(record, context, {
-      callId: str(item.call_id) ?? str(item.id),
+      callId,
       kind: isPatch ? 'patch' : 'command',
       source: 'local_shell_call',
       name: 'local_shell',
+      turnId: passthroughTurnId(item),
+      observed: recordEvidence('call', 'local_shell_call', record, callId),
     });
     exec.generation = 'local_shell';
     exec.argv = argv;
@@ -379,13 +413,18 @@ export class CodexExecutionParser {
     const name = str(item.name) ?? 'custom';
     const namespace = str(item.namespace);
     const input = typeof item.input === 'string' ? item.input : '';
+    const callId = str(item.call_id);
+    const observed = recordEvidence('call', 'custom_tool_call', record, callId);
+    const turnId = passthroughTurnId(item);
 
     if (name === 'exec' && !namespace) {
       const cell = this.base(record, context, {
-        callId: str(item.call_id),
+        callId,
         kind: 'code_cell',
         source: 'custom_tool_call',
         name,
+        turnId,
+        observed,
       });
       const parsed = parseCodeCell(input);
       cell.input = truncateText(input, MAX_INPUT_CHARS);
@@ -393,20 +432,24 @@ export class CodexExecutionParser {
       cell.cwd = context.cwd;
       if (parsed.calls.length > 0) {
         cell.children = parsed.calls.map((call, index) =>
-          this.childFromCall(cell, index, call.name, call.args, record, context, 'script')
+          this.childFromCall(cell, index, call.name, call.args, record, context, {
+            code: { line: call.line, dynamic: call.dynamic },
+          })
         );
-        cell.childrenSource = 'script';
       }
       this.codeCells.push(cell);
+      this.openCells.add(cell);
       return cell;
     }
 
     const isPatch = name === 'apply_patch';
     const exec = this.base(record, context, {
-      callId: str(item.call_id),
+      callId,
       kind: isPatch ? 'patch' : 'tool',
       source: 'custom_tool_call',
       name,
+      turnId,
+      observed,
     });
     exec.namespace = namespace;
     exec.input = truncateText(input, MAX_INPUT_CHARS);
@@ -424,11 +467,14 @@ export class CodexExecutionParser {
     context: ExecutionContext
   ): Execution {
     const args = isRecord(item.arguments) ? item.arguments : undefined;
+    const callId = str(item.call_id) ?? str(item.id);
     const exec = this.base(record, context, {
-      callId: str(item.call_id) ?? str(item.id),
+      callId,
       kind: 'tool_search',
       source: 'tool_search_call',
       name: 'tool_search',
+      turnId: passthroughTurnId(item),
+      observed: recordEvidence('call', 'tool_search_call', record, callId),
     });
     exec.args = args;
     exec.input = item.arguments !== undefined ? JSON.stringify(item.arguments) : undefined;
@@ -445,16 +491,24 @@ export class CodexExecutionParser {
     context: ExecutionContext
   ): Execution {
     const action = isRecord(item.action) ? item.action : {};
+    const id = str(item.id);
+    const evidence = recordEvidence('call', 'web_search_call', record, id);
     const exec = this.base(record, context, {
-      callId: str(item.id),
+      callId: id,
       kind: 'web_search',
       source: 'web_search_call',
       name: 'web_search',
+      turnId: passthroughTurnId(item),
+      observed: evidence,
     });
     exec.args = action;
     exec.command = describeWebSearchAction(action);
+    // Hosted calls are recorded once, with their final status and no timing.
     exec.status = mapHostedStatus(str(item.status));
-    exec.completedAt = exec.status === 'running' ? undefined : exec.timestamp;
+    if (exec.status !== 'running') {
+      exec.completedAt = exec.timestamp;
+      exec.evidence.result = evidence;
+    }
     return exec;
   }
 
@@ -463,11 +517,15 @@ export class CodexExecutionParser {
     item: Record<string, unknown>,
     context: ExecutionContext
   ): Execution {
+    const id = str(item.id);
+    const evidence = recordEvidence('call', 'image_generation_call', record, id);
     const exec = this.base(record, context, {
-      callId: str(item.id),
+      callId: id,
       kind: 'image_generation',
       source: 'image_generation_call',
       name: 'image_generation',
+      turnId: passthroughTurnId(item),
+      observed: evidence,
     });
     exec.command = str(item.revised_prompt);
     exec.status = mapHostedStatus(str(item.status));
@@ -475,32 +533,14 @@ export class CodexExecutionParser {
       exec.output = 'Image generated (image data is not shown)';
       exec.outputImageCount = 1;
     }
-    return exec;
-  }
-
-  private commandFromResult(
-    result: CodexCommandResult,
-    record: CodexRolloutRecord,
-    context: ExecutionContext,
-    display: string | undefined
-  ): Execution {
-    const isUserShell = result.source === 'user_shell';
-    const exec = this.base(record, context, {
-      callId: result.callId,
-      kind: 'command',
-      source: isUserShell ? 'user_shell' : 'command_execution',
-      name: isUserShell ? 'user_shell' : 'command',
-    });
-    exec.argv = result.command;
-    exec.command = display;
-    exec.shell = result.command ? describeArgv(result.command).shell : undefined;
-    exec.cwd = result.cwd ?? context.cwd;
-    applyCommandResult(exec, result, record);
+    if (exec.status !== 'running') {
+      exec.evidence.result = evidence;
+    }
     return exec;
   }
 
   /**
-   * Build a nested execution for a code-cell call.
+   * Build a nested execution for a code-cell call site or inventory entry.
    */
   private childFromCall(
     cell: Execution,
@@ -509,7 +549,7 @@ export class CodexExecutionParser {
     rawArgs: unknown,
     record: CodexRolloutRecord,
     context: ExecutionContext,
-    source: NestedCallSource
+    evidence: Execution['evidence']
   ): Execution {
     let args: unknown = rawArgs;
     let truncatedBytes: number | undefined;
@@ -528,13 +568,14 @@ export class CodexExecutionParser {
         ? { input: args }
         : undefined;
     const classified = classifyTool(name, undefined, renderDynamicFields(argsObject), cell.cwd);
+    const fromInventory = evidence.observed?.kind === 'inventory';
 
     const child: Execution = {
       id: `${cell.id}:${index + 1}`,
       parentId: cell.id,
       provider: 'codex',
       kind: classified.kind,
-      source: source === 'recorded' ? 'executed_tool_call' : 'cell_script',
+      source: fromInventory ? 'executed_tool_call' : 'cell_script',
       name,
       args: argsObject,
       input: args !== undefined ? truncateText(JSON.stringify(args), MAX_INPUT_CHARS) : undefined,
@@ -542,15 +583,227 @@ export class CodexExecutionParser {
       statusDetail:
         truncatedBytes !== undefined
           ? `Arguments truncated by Codex (${truncatedBytes} bytes)`
-          : source === 'recorded'
-            ? 'Per-call result not recorded; see the cell output'
-            : 'Extracted from the cell script; per-call result not recorded',
+          : fromInventory
+            ? 'Listed by Codex as attempted; no result was recorded for this call'
+            : 'Found in the cell script; Codex recorded no result for this call',
       timestamp: record.timestamp ?? context.timestamp ?? cell.timestamp,
       lineNumber: record.lineNumber,
       turnId: cell.turnId,
+      evidence,
     };
     applyClassification(child, classified, 'code_mode');
     return child;
+  }
+
+  // ===========================================================================
+  // Recorded items
+  // ===========================================================================
+
+  private executionFromItem(
+    item: CodexRecordedItem,
+    envelope: CodexItemEnvelope,
+    evidence: RecordEvidence,
+    record: CodexRolloutRecord,
+    context: ExecutionContext
+  ): Execution {
+    const startedAt = isoFromMs(envelope.startedAtMs);
+    const completedAt = isoFromMs(envelope.completedAtMs);
+    const exec: Execution = {
+      id: this.uniqueId(item.id),
+      provider: 'codex',
+      kind: 'tool',
+      source: envelope.recordType,
+      name: 'item',
+      status: 'completed',
+      timestamp: startedAt ?? completedAt ?? record.timestamp ?? context.timestamp ?? '',
+      completedAt: completedAt ?? record.timestamp,
+      lineNumber: record.lineNumber,
+      outputLineNumber: record.lineNumber,
+      turnId: envelope.turnId ?? context.turnId,
+      evidence: { observed: evidence, result: evidence },
+    };
+
+    switch (item.type) {
+      case 'command': {
+        const display = item.command ? describeArgv(item.command) : undefined;
+        const interaction =
+          item.source === 'unified_exec_interaction' || item.interactionInput !== undefined;
+        exec.kind = interaction ? 'command_input' : 'command';
+        exec.name = item.source === 'user_shell' ? 'user_shell' : 'command';
+        exec.source = item.source === 'user_shell' ? 'user_shell' : envelope.recordType;
+        exec.argv = item.command;
+        exec.command = interaction ? item.interactionInput : display?.command;
+        exec.shell = display?.shell;
+        exec.cwd = item.cwd ?? context.cwd;
+        exec.processId = item.processId;
+        exec.exitCode = item.exitCode;
+        exec.status = commandItemStatus(item.status, item.exitCode);
+        this.setItemOutput(exec, item.output);
+        break;
+      }
+      case 'file_change':
+        exec.kind = 'patch';
+        exec.name = 'apply_patch';
+        exec.command = 'apply_patch';
+        exec.cwd = context.cwd;
+        exec.patchFiles = item.files;
+        exec.status = mapPatchStatus(item.status);
+        this.setItemOutput(exec, joinText(item.stdout, item.stderr));
+        break;
+      case 'mcp':
+        exec.kind = 'mcp';
+        exec.name = item.tool ?? 'mcp';
+        exec.namespace = item.server;
+        exec.args = isRecord(item.arguments) ? item.arguments : undefined;
+        exec.status = item.isError ? 'failed' : mapMcpStatus(item.status);
+        exec.statusDetail = item.error;
+        break;
+      case 'web_search':
+        exec.kind = 'web_search';
+        exec.name = 'web_search';
+        exec.command = item.query;
+        exec.args = item.actionType ? { action: item.actionType } : undefined;
+        if (item.resultCount !== undefined) {
+          this.setItemOutput(exec, `${item.resultCount} result(s)`);
+        }
+        break;
+      case 'extension':
+        exec.name = item.extensionKind ?? 'extension';
+        exec.command = item.query;
+        break;
+    }
+    applyItemTiming(
+      exec,
+      item.type === 'command' || item.type === 'mcp' ? item.durationMs : undefined,
+      envelope
+    );
+    return exec;
+  }
+
+  /**
+   * Apply an item record to an execution it was explicitly linked to.
+   */
+  private applyItem(
+    draft: Execution,
+    item: CodexRecordedItem,
+    envelope: CodexItemEnvelope,
+    evidence: RecordEvidence,
+    record: CodexRolloutRecord
+  ): void {
+    draft.evidence.observed ??= evidence;
+    draft.evidence.result = evidence;
+    switch (item.type) {
+      case 'command': {
+        if (item.exitCode !== undefined) {
+          draft.exitCode = item.exitCode;
+        }
+        const status = commandItemStatus(item.status, item.exitCode);
+        if (item.status !== undefined || item.exitCode !== undefined) {
+          draft.status = status;
+          draft.statusDetail = undefined;
+        }
+        draft.cwd ??= item.cwd;
+        draft.processId ??= item.processId;
+        if (draft.output === undefined && item.output) {
+          this.setItemOutput(draft, item.output);
+          this.provisionalOutputs.add(draft);
+        }
+        break;
+      }
+      case 'file_change': {
+        const status = mapPatchStatus(item.status);
+        if (status !== 'completed' || draft.status === 'running' || draft.status === 'unknown') {
+          draft.status = status;
+        }
+        if (!draft.patchFiles || draft.patchFiles.length === 0) {
+          draft.patchFiles = item.files;
+        }
+        if (draft.output === undefined) {
+          const text = joinText(item.stdout, item.stderr);
+          if (text) {
+            this.setItemOutput(draft, text);
+            this.provisionalOutputs.add(draft);
+          }
+        }
+        if (status === 'failed') {
+          draft.statusDetail = firstLine(item.stderr) ?? 'Patch failed to apply';
+        }
+        break;
+      }
+      case 'mcp':
+        if (item.isError) {
+          draft.status = 'failed';
+          draft.statusDetail = item.error ?? draft.statusDetail;
+        } else if (draft.status === 'running' || draft.status === 'unknown') {
+          draft.status = mapMcpStatus(item.status);
+        }
+        break;
+      case 'web_search':
+      case 'extension':
+        if (draft.status === 'running' || draft.status === 'unknown') {
+          draft.status = 'completed';
+        }
+        break;
+    }
+    applyItemTiming(
+      draft,
+      item.type === 'command' || item.type === 'mcp' ? item.durationMs : undefined,
+      envelope
+    );
+    draft.completedAt ??= isoFromMs(envelope.completedAtMs) ?? record.timestamp;
+    draft.outputLineNumber ??= record.lineNumber;
+  }
+
+  private setItemOutput(draft: Execution, text: string | undefined): void {
+    if (!text) {
+      return;
+    }
+    draft.output = truncateText(text, MAX_OUTPUT_CHARS);
+    draft.outputTruncated = text.length > MAX_OUTPUT_CHARS || undefined;
+    draft.outputCount = 1;
+  }
+
+  private attachRecordedChild(cellId: string, draft: Execution, link: EvidenceLink): void {
+    const cell = this.codeCells.find((candidate) => candidate.id === cellId);
+    if (!cell) {
+      return;
+    }
+    draft.parentId = cell.id;
+    draft.turnId ??= cell.turnId;
+    draft.evidence.cellLink = link;
+    cell.children = [...(cell.children ?? []), draft];
+  }
+
+  /**
+   * Link a cell's call sites (script or inventory) to recorded command items
+   * when the normalized command text is identical and unique on both sides.
+   */
+  private linkCallSites(draft: Execution): void {
+    const children = draft.children ?? [];
+    const sites = new Map<string, Execution[]>();
+    const items = new Map<string, Execution[]>();
+    for (const child of children) {
+      if (child.kind !== 'command' || child.command === undefined) continue;
+      const key = normalizeCommand(child.command);
+      const isSite =
+        (child.evidence.code !== undefined || child.evidence.observed?.kind === 'inventory') &&
+        child.evidence.result === undefined;
+      const isItem = child.evidence.observed?.kind === 'item' && child.evidence.code === undefined;
+      if (isSite) sites.set(key, [...(sites.get(key) ?? []), child]);
+      if (isItem) items.set(key, [...(items.get(key) ?? []), child]);
+    }
+
+    const merged = new Set<Execution>();
+    for (const [key, candidates] of sites) {
+      const matches = items.get(key);
+      if (candidates.length !== 1 || matches?.length !== 1) continue;
+      mergeRecordedInto(candidates[0], matches[0]);
+      merged.add(matches[0]);
+      this.byItemId.set(matches[0].id, candidates[0]);
+    }
+    if (merged.size > 0) {
+      draft.children = children.filter((child) => !merged.has(child));
+    }
   }
 
   // ===========================================================================
@@ -564,7 +817,7 @@ export class CodexExecutionParser {
     record: CodexRolloutRecord
   ): void {
     if (this.provisionalOutputs.has(draft)) {
-      // Prefer the output the model actually saw over the per-command result text.
+      // Prefer the output the model actually saw over the item record's text.
       this.provisionalOutputs.delete(draft);
       draft.output = undefined;
       draft.outputCount = 0;
@@ -590,13 +843,17 @@ export class CodexExecutionParser {
     draft: Execution,
     parsed: ParsedToolOutput,
     text: string,
-    record: CodexRolloutRecord
+    record: CodexRolloutRecord,
+    intermediate: boolean
   ): void {
-    if (parsed.wallTimeMs !== undefined) {
+    const itemReported =
+      draft.evidence.result?.kind === 'item' && draft.durationSource === 'reported';
+    if (parsed.wallTimeMs !== undefined && !itemReported) {
       draft.durationMs = parsed.wallTimeMs;
-      draft.durationReported = true;
-    } else if (!draft.durationReported) {
+      draft.durationSource = 'reported';
+    } else if (draft.durationSource === undefined || draft.durationSource === 'record_timestamps') {
       draft.durationMs = observedDuration(draft.timestamp, draft.completedAt);
+      draft.durationSource = draft.durationMs === undefined ? undefined : 'record_timestamps';
     }
 
     switch (draft.kind) {
@@ -607,10 +864,15 @@ export class CodexExecutionParser {
         return;
       case 'code_cell':
       case 'code_wait':
-        this.applyScriptOutcome(draft, parsed, text, record);
+        this.applyScriptOutcome(draft, parsed, text, record, intermediate);
         return;
-      default:
-        draft.status = classifyOutcomeText(text) ?? 'completed';
+      default: {
+        const outcome = classifyOutcomeText(parsed.body || text);
+        draft.status = outcome ?? 'completed';
+        if (outcome) {
+          draft.statusDetail = firstLine(parsed.body || text);
+        }
+      }
     }
   }
 
@@ -650,8 +912,9 @@ export class CodexExecutionParser {
         origin.status = parsed.exitCode === 0 ? 'completed' : 'failed';
         origin.completedAt = record.timestamp ?? origin.completedAt;
         origin.durationMs = observedDuration(origin.timestamp, origin.completedAt);
-        origin.durationReported = false;
+        origin.durationSource = origin.durationMs === undefined ? undefined : 'record_timestamps';
         origin.statusDetail = `Exited while polled by ${draft.id}`;
+        origin.evidence.result = recordEvidence('output', 'function_call_output', record, draft.id);
         this.processOrigins.delete(draft.processId);
       }
     }
@@ -661,7 +924,8 @@ export class CodexExecutionParser {
     draft: Execution,
     parsed: ParsedToolOutput,
     text: string,
-    record: CodexRolloutRecord
+    record: CodexRolloutRecord,
+    intermediate: boolean
   ): void {
     if (parsed.cellId) {
       draft.cellId ??= parsed.cellId;
@@ -677,12 +941,20 @@ export class CodexExecutionParser {
           (draft.parentId ? this.findById(draft.parentId) : undefined));
 
     if (!parsed.scriptStatus) {
-      // Extra outputs (e.g. `notify()`) carry no script header; only failures change state.
+      if (intermediate) {
+        return;
+      }
       const outcome = classifyOutcomeText(parsed.body || text);
-      if (outcome && draft.kind !== 'code_cell') {
-        draft.status = outcome;
-      } else if (draft.kind === 'code_wait') {
-        draft.status = 'completed';
+      if (draft.kind === 'code_cell') {
+        // No status header: the outcome is unknown, and without a yield header
+        // the cell cannot be shown to still be running.
+        draft.status = outcome ?? 'unknown';
+        draft.statusDetail = outcome
+          ? firstLine(parsed.body || text)
+          : 'Output recorded without a script status header';
+        this.openCells.delete(draft);
+      } else {
+        draft.status = outcome ?? 'completed';
       }
       return;
     }
@@ -696,6 +968,9 @@ export class CodexExecutionParser {
     if (draft.kind === 'code_cell') {
       draft.status = cellStatus;
       draft.statusDetail = detail;
+      if (parsed.scriptStatus !== 'running') {
+        this.openCells.delete(draft);
+      }
       return;
     }
 
@@ -705,13 +980,24 @@ export class CodexExecutionParser {
     if (cell && cell !== draft) {
       draft.parentId ??= cell.id;
       if (parsed.scriptStatus !== 'running') {
-        cell.status = cellStatus;
-        cell.statusDetail = `${detail} (reported by ${draft.id})`;
-        cell.completedAt = record.timestamp ?? cell.completedAt;
-        cell.durationMs = observedDuration(cell.timestamp, cell.completedAt);
-        cell.durationReported = false;
+        this.completeCell(cell, cellStatus, `${detail} (reported by ${draft.id})`, record);
       }
     }
+  }
+
+  private completeCell(
+    draft: Execution,
+    status: ExecutionStatus,
+    detail: string,
+    record: CodexRolloutRecord
+  ): void {
+    draft.status = status;
+    draft.statusDetail = detail;
+    draft.completedAt = record.timestamp ?? draft.completedAt;
+    draft.durationMs = observedDuration(draft.timestamp, draft.completedAt);
+    draft.durationSource = draft.durationMs === undefined ? undefined : 'record_timestamps';
+    draft.evidence.result = recordEvidence('output', 'function_call_output', record);
+    this.openCells.delete(draft);
   }
 
   private applyPassthroughMetadata(
@@ -746,42 +1032,33 @@ export class CodexExecutionParser {
 
     const calls = Array.isArray(metadata.executed_tool_calls) ? metadata.executed_tool_calls : [];
     if (calls.length > 0) {
-      // Script-derived children are replaced by the recorded inventory, but any
-      // per-command results already matched to them are carried over.
-      let carried: Execution[] = [];
-      if (target.childrenSource !== 'recorded') {
-        carried = (target.children ?? []).filter(hasResult);
-        target.children = [];
-        target.childrenSource = 'recorded';
-      }
-      const children = target.children ?? [];
+      // A recorded inventory supersedes the script's call sites; recorded items stay.
+      const existing = target.children ?? [];
+      const inventory = existing.filter((child) => child.evidence.observed?.kind === 'inventory');
+      const recorded = existing.filter(
+        (child) =>
+          child.evidence.code === undefined && child.evidence.observed?.kind !== 'inventory'
+      );
       for (const call of calls) {
         if (!isRecord(call)) continue;
-        const child = this.childFromCall(
-          target,
-          children.length,
-          str(call.name) ?? 'unknown',
-          call.arguments,
-          record,
-          context,
-          'recorded'
+        inventory.push(
+          this.childFromCall(
+            target,
+            inventory.length,
+            str(call.name) ?? 'unknown',
+            call.arguments,
+            record,
+            context,
+            {
+              observed: recordEvidence('inventory', 'executed_tool_calls', record),
+            }
+          )
         );
-        const matchIndex = carried.findIndex((previous) => sameOperation(previous, child));
-        if (matchIndex !== -1) {
-          copyResult(carried[matchIndex], child);
-          carried.splice(matchIndex, 1);
-        }
-        children.push(child);
       }
-      for (const leftover of carried) {
-        leftover.id = `${target.id}:${children.length + 1}`;
-        children.push(leftover);
-      }
-      target.children = children;
+      target.children = [...inventory, ...recorded];
     }
     if (metadata.tool_calls_complete === true) {
       target.childrenComplete = true;
-      target.childrenSource ??= 'recorded';
       target.children ??= [];
     }
   }
@@ -790,7 +1067,8 @@ export class CodexExecutionParser {
     record: CodexRolloutRecord,
     item: Record<string, unknown>,
     context: ExecutionContext,
-    callId: string | undefined
+    callId: string | undefined,
+    evidence: RecordEvidence
   ): Execution | undefined {
     let exec = callId ? this.byCallId.get(callId) : undefined;
     // Hosted tool search may omit call ids; pair with the latest unanswered search.
@@ -804,6 +1082,8 @@ export class CodexExecutionParser {
         kind: 'tool_search',
         source: 'tool_search_output',
         name: 'tool_search',
+        turnId: passthroughTurnId(item),
+        observed: evidence,
       });
       created = this.register(exec, callId);
     }
@@ -824,7 +1104,9 @@ export class CodexExecutionParser {
       record
     );
     exec.status = item.status === 'failed' ? 'failed' : 'completed';
+    exec.evidence.result = evidence;
     exec.durationMs = observedDuration(exec.timestamp, exec.completedAt);
+    exec.durationSource = exec.durationMs === undefined ? undefined : 'record_timestamps';
     return created;
   }
 
@@ -832,11 +1114,7 @@ export class CodexExecutionParser {
   // Registration helpers
   // ===========================================================================
 
-  private base(
-    record: CodexRolloutRecord,
-    context: ExecutionContext,
-    init: { callId: string | undefined; kind: ExecutionKind; source: string; name: string }
-  ): Execution {
+  private base(record: CodexRolloutRecord, context: ExecutionContext, init: BaseInit): Execution {
     return {
       id: this.uniqueId(init.callId),
       provider: 'codex',
@@ -846,7 +1124,8 @@ export class CodexExecutionParser {
       status: 'running',
       timestamp: record.timestamp ?? context.timestamp ?? '',
       lineNumber: record.lineNumber,
-      turnId: context.turnId,
+      turnId: init.turnId ?? context.turnId,
+      evidence: { observed: init.observed },
     };
   }
 
@@ -871,15 +1150,6 @@ export class CodexExecutionParser {
 
   private findById(id: string): Execution | undefined {
     return this.topLevel.find((exec) => exec.id === id);
-  }
-
-  private findRunningCell(): Execution | undefined {
-    for (let i = this.codeCells.length - 1; i >= 0; i--) {
-      if (this.codeCells[i].status === 'running') {
-        return this.codeCells[i];
-      }
-    }
-    return undefined;
   }
 
   private *allExecutions(): Generator<Execution> {
@@ -1004,74 +1274,132 @@ function applyClassification(
   }
 }
 
-function applyCommandResult(
+/**
+ * Evidence for one persisted record.
+ */
+function recordEvidence(
+  kind: RecordEvidence['kind'],
+  recordType: string,
+  record: CodexRolloutRecord,
+  recordId?: string
+): RecordEvidence {
+  return { kind, recordType, lineNumber: record.lineNumber, recordId };
+}
+
+/** Turn id the harness stamped on a response item, when present. */
+function passthroughTurnId(item: Record<string, unknown>): string | undefined {
+  const metadata = item.internal_chat_message_metadata_passthrough;
+  return isRecord(metadata) ? str(metadata.turn_id) : undefined;
+}
+
+function isoFromMs(ms: number | undefined): string | undefined {
+  if (ms === undefined) {
+    return undefined;
+  }
+  const date = new Date(ms);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+/**
+ * Timing from an item record: a duration the provider reported wins over one
+ * computed from the provider's own start/completion timestamps.
+ */
+function applyItemTiming(
   draft: Execution,
-  result: CodexCommandResult,
-  record: CodexRolloutRecord
+  reportedMs: number | undefined,
+  envelope: CodexItemEnvelope
 ): void {
-  if (result.exitCode !== undefined) {
-    draft.exitCode = result.exitCode;
+  if (reportedMs !== undefined) {
+    draft.durationMs = reportedMs;
+    draft.durationSource = 'reported';
+    return;
   }
-  draft.status = mapCommandStatus(result.status, result.exitCode) ?? draft.status;
-  if (draft.status === 'running' && result.exitCode !== undefined) {
-    draft.status = result.exitCode === 0 ? 'completed' : 'failed';
+  const { startedAtMs, completedAtMs } = envelope;
+  if (
+    draft.durationSource !== 'reported' &&
+    startedAtMs !== undefined &&
+    completedAtMs !== undefined &&
+    completedAtMs >= startedAtMs
+  ) {
+    draft.durationMs = completedAtMs - startedAtMs;
+    draft.durationSource = 'provider_timestamps';
   }
-  if (result.durationMs !== undefined) {
-    draft.durationMs = result.durationMs;
-    draft.durationReported = true;
-  }
-  draft.cwd ??= result.cwd;
-  draft.processId ??= result.processId;
-  if (draft.output === undefined && result.output) {
-    draft.output = truncateText(result.output, MAX_OUTPUT_CHARS);
-    draft.outputTruncated = result.output.length > MAX_OUTPUT_CHARS || undefined;
-    draft.outputCount = 1;
-  }
-  draft.completedAt ??= record.timestamp;
-  draft.outputLineNumber ??= record.lineNumber;
-  draft.statusDetail = undefined;
 }
 
-function findMatchingChild(cell: Execution, display: string | undefined): Execution | undefined {
-  const children = cell.children ?? [];
-  const unresolved = children.filter((child) => child.status === 'unknown' && !child.completedAt);
-  if (display) {
-    const wanted = normalizeCommand(display);
-    const exact = unresolved.find(
-      (child) => child.command !== undefined && normalizeCommand(child.command) === wanted
-    );
-    if (exact) {
-      return exact;
-    }
+/**
+ * Move a recorded command item's result onto the script call site it matched.
+ */
+function mergeRecordedInto(draft: Execution, recorded: Execution): void {
+  draft.status = recorded.status;
+  draft.statusDetail = recorded.statusDetail;
+  draft.exitCode = recorded.exitCode;
+  draft.durationMs = recorded.durationMs;
+  draft.durationSource = recorded.durationSource;
+  draft.output = recorded.output;
+  draft.outputCount = recorded.outputCount;
+  draft.outputTruncated = recorded.outputTruncated;
+  draft.completedAt = recorded.completedAt;
+  draft.outputLineNumber = recorded.outputLineNumber;
+  draft.processId ??= recorded.processId;
+  draft.cwd = recorded.cwd ?? draft.cwd;
+  draft.argv ??= recorded.argv;
+  draft.shell ??= recorded.shell;
+  draft.generation ??= recorded.generation;
+  draft.evidence = {
+    ...draft.evidence,
+    observed: recorded.evidence.observed,
+    result: recorded.evidence.result,
+    cellLink: recorded.evidence.cellLink,
+    callSiteLink: {
+      method: 'content',
+      detail:
+        'Identical command text: the only such call site and the only such recorded command in this cell',
+    },
+  };
+}
+
+function commandItemStatus(
+  status: string | undefined,
+  exitCode: number | undefined
+): ExecutionStatus {
+  const mapped = mapCommandStatus(status, exitCode);
+  if (mapped) {
+    return mapped;
   }
-  // A script call with a runtime-only command (e.g. inside a loop).
-  return unresolved.find((child) => child.kind === 'command' && child.command?.includes('‹'));
-}
-
-function hasResult(exec: Execution): boolean {
-  return exec.completedAt !== undefined || exec.exitCode !== undefined;
-}
-
-function sameOperation(a: Execution, b: Execution): boolean {
-  if (a.command !== undefined && b.command !== undefined) {
-    return normalizeCommand(a.command) === normalizeCommand(b.command);
+  if (exitCode !== undefined) {
+    return exitCode === 0 ? 'completed' : 'failed';
   }
-  return a.name === b.name;
+  return 'completed';
 }
 
-function copyResult(source: Execution, draft: Execution): void {
-  draft.exitCode = source.exitCode;
-  draft.status = source.status;
-  draft.statusDetail = source.statusDetail;
-  draft.durationMs = source.durationMs;
-  draft.durationReported = source.durationReported;
-  draft.output = source.output;
-  draft.outputCount = source.outputCount;
-  draft.outputTruncated = source.outputTruncated;
-  draft.completedAt = source.completedAt;
-  draft.outputLineNumber = source.outputLineNumber;
-  draft.processId ??= source.processId;
-  draft.cwd ??= source.cwd;
+function mapPatchStatus(status: string | undefined): ExecutionStatus {
+  switch (status) {
+    case 'failed':
+      return 'failed';
+    case 'declined':
+      return 'declined';
+    case 'in_progress':
+      return 'running';
+    default:
+      return 'completed';
+  }
+}
+
+function mapMcpStatus(status: string | undefined): ExecutionStatus {
+  switch (status) {
+    case 'failed':
+      return 'failed';
+    case 'in_progress':
+    case 'inProgress':
+      return 'running';
+    default:
+      return 'completed';
+  }
+}
+
+function joinText(...parts: (string | undefined)[]): string | undefined {
+  const present = parts.filter((part): part is string => !!part);
+  return present.length > 0 ? present.join('\n') : undefined;
 }
 
 function mapCommandStatus(

@@ -2,6 +2,7 @@
  * Display helpers for the Codex execution timeline.
  */
 
+import { isStaticOnly } from '@shared/utils/executionEvidence';
 import {
   Ban,
   Braces,
@@ -23,7 +24,15 @@ import {
   Wrench,
 } from 'lucide-react';
 
-import type { Execution, ExecutionKind, ExecutionStatus, TimelineEntry } from '@shared/types';
+import type {
+  CorrelationMethod,
+  DurationSource,
+  Execution,
+  ExecutionKind,
+  ExecutionStatus,
+  RecordEvidence,
+  TimelineEntry,
+} from '@shared/types';
 
 export interface StatusAppearance {
   icon: LucideIcon;
@@ -94,7 +103,8 @@ export function statusLabel(exec: Execution): string {
     case 'interrupted':
       return 'interrupted';
     case 'unknown':
-      return 'not recorded';
+      // A result record without a readable outcome is not the same as no record.
+      return exec.evidence.result ? 'outcome unknown' : 'not recorded';
   }
 }
 
@@ -174,6 +184,110 @@ export function executionSummary(exec: Execution): string | undefined {
 function firstLine(text: string | undefined): string | undefined {
   const line = text?.trim().split('\n')[0];
   return line ? line : undefined;
+}
+
+// =============================================================================
+// Evidence
+// =============================================================================
+
+export interface EvidenceBadge {
+  label: string;
+  title: string;
+}
+
+const CORRELATION_TEXT: Record<CorrelationMethod, string> = {
+  explicit_id: 'shared identifier',
+  turn_window: 'same turn, only running cell (record order)',
+  content: 'identical content',
+  unresolved: 'not linked',
+};
+
+function sameRecord(a: RecordEvidence, b: RecordEvidence): boolean {
+  return a.lineNumber === b.lineNumber && a.recordType === b.recordType;
+}
+
+function describeRecord(record: RecordEvidence): string {
+  return `${record.recordType}, rollout line ${record.lineNumber}`;
+}
+
+/**
+ * Evidence badge for a nested execution or an unlinked item record. Direct
+ * calls with their own call and output records get none.
+ */
+export function evidenceBadge(exec: Execution): EvidenceBadge | undefined {
+  const { observed, result, cellLink, callSiteLink } = exec.evidence;
+  if (isStaticOnly(exec)) {
+    return {
+      label: 'script only',
+      title:
+        'Found in the cell script by static analysis. Codex recorded nothing for this call, so it may not have run.',
+    };
+  }
+  if (observed?.kind === 'inventory' && !result) {
+    return {
+      label: 'attempted',
+      title: 'Listed by Codex as attempted; no result was recorded for this call.',
+    };
+  }
+  if (callSiteLink?.method === 'content' && result) {
+    return {
+      label: 'script + record',
+      title: `Call site linked to ${describeRecord(result)} by identical command text.`,
+    };
+  }
+  if (observed?.kind === 'item' && cellLink?.method === 'turn_window') {
+    return {
+      label: 'recorded',
+      title: `Recorded by Codex (${describeRecord(observed)}). Attributed to this cell by turn and record order; no identifier links them.`,
+    };
+  }
+  if (observed?.kind === 'item' && cellLink?.method === 'unresolved') {
+    return {
+      label: 'unlinked record',
+      title: `Recorded by Codex (${describeRecord(observed)}). ${cellLink.detail ?? 'Not linked to a call.'}`,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Lines describing what is known about an execution and how it was linked.
+ */
+export function describeEvidence(exec: Execution): string[] {
+  const { code, observed, result, cellLink, callSiteLink } = exec.evidence;
+  const lines: string[] = [];
+  if (code) {
+    lines.push(
+      `Script call site at line ${code.line} of the cell${code.dynamic ? ' (arguments only known at runtime)' : ''}`
+    );
+  }
+  if (observed) {
+    lines.push(`Observed: ${describeRecord(observed)}`);
+  }
+  if (result && !(observed && sameRecord(result, observed))) {
+    lines.push(`Result: ${describeRecord(result)}`);
+  } else if (!result) {
+    lines.push('Result: none recorded');
+  }
+  if (cellLink) {
+    const detail = cellLink.detail ? ` (${cellLink.detail})` : '';
+    lines.push(`Cell link: ${CORRELATION_TEXT[cellLink.method]}${detail}`);
+  }
+  if (callSiteLink) {
+    const detail = callSiteLink.detail ? ` (${callSiteLink.detail})` : '';
+    lines.push(`Call site link: ${CORRELATION_TEXT[callSiteLink.method]}${detail}`);
+  }
+  return lines;
+}
+
+const DURATION_SOURCE_TEXT: Record<DurationSource, string> = {
+  reported: 'reported by Codex',
+  provider_timestamps: 'from Codex start and end times',
+  record_timestamps: 'between rollout records',
+};
+
+export function durationSourceLabel(source: DurationSource | undefined): string {
+  return source ? DURATION_SOURCE_TEXT[source] : 'source unknown';
 }
 
 /**

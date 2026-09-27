@@ -74,10 +74,26 @@ export interface CompactionEntry extends TimelineEntryBase {
   encrypted: boolean;
 }
 
+/**
+ * Records a subagent inherited from its parent thread when it was spawned.
+ * They are the parent's history, not the subagent's own activity, so they are
+ * summarized by this one entry instead of being rendered.
+ */
+export interface InheritedContextEntry extends TimelineEntryBase {
+  kind: 'inherited_context';
+  /** Number of inherited records */
+  recordCount: number;
+  /** Thread the history was copied from */
+  parentThreadId?: string;
+  /** 1-based line of the last inherited record */
+  lastLineNumber: number;
+}
+
 export type TimelineEntry =
   | UserMessageEntry
   | AgentMessageEntry
   | ReasoningEntry
   | ExecutionEntry
   | TurnEventEntry
-  | CompactionEntry;
+  | CompactionEntry
+  | InheritedContextEntry;

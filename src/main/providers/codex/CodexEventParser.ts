@@ -4,9 +4,15 @@
  * Which events are persisted depends on the rollout's history mode:
  * - Legacy rollouts keep `user_message`, `agent_message`, `agent_reasoning`,
  *   `patch_apply_end`, `mcp_tool_call_end`, … alongside the response items.
- * - Paginated rollouts keep `item_completed` events carrying `TurnItem`s,
- *   including `CommandExecution` items with per-command exit codes.
+ * - Paginated rollouts keep `item_completed` events carrying `TurnItem`s.
  * Both keep `token_count`, `task_started`, `task_complete` and `turn_aborted`.
+ *
+ * Execution items (CommandExecution, FileChange, McpToolCall, WebSearch,
+ * Extension) and the legacy `*_end` events are normalized into one
+ * `recorded_item` shape. Real rollouts show these records are the only
+ * persisted evidence of operations dispatched from code-mode cells; their ids
+ * (`exec-<uuid>`) never equal a call id, so linking them to a call or cell is
+ * left to the execution parser (see docs/codex-real-validation).
  */
 
 import { durationToMs } from './execOutput';
@@ -15,20 +21,69 @@ import type { CodexTokenUsageRaw } from './types';
 import type { AgentTokenUsage, AgentTokenUsageTotals } from '@main/domain';
 
 /**
- * A per-command result (from `item_completed` CommandExecution items or
- * `exec_command_end` events).
+ * An execution recorded by the harness. `id` is the item id: the call id for
+ * direct calls, `exec-<uuid>` for calls dispatched from a code-mode cell.
  */
-export interface CodexCommandResult {
-  callId: string;
-  command?: string[];
-  cwd?: string;
-  source?: string;
-  processId?: string;
-  exitCode?: number;
-  durationMs?: number;
-  status?: string;
-  output?: string;
-  interactionInput?: string;
+export type CodexRecordedItem =
+  | {
+      type: 'command';
+      id: string;
+      command?: string[];
+      cwd?: string;
+      /** `agent`, `user_shell`, `unified_exec_startup`, `unified_exec_interaction` */
+      source?: string;
+      processId?: string;
+      exitCode?: number;
+      /** Duration field reported by the provider */
+      durationMs?: number;
+      status?: string;
+      output?: string;
+      interactionInput?: string;
+    }
+  | {
+      type: 'file_change';
+      id: string;
+      status?: string;
+      files: string[];
+      stdout?: string;
+      stderr?: string;
+    }
+  | {
+      type: 'mcp';
+      id: string;
+      server?: string;
+      tool?: string;
+      arguments?: unknown;
+      status?: string;
+      durationMs?: number;
+      isError: boolean;
+      error?: string;
+    }
+  | {
+      type: 'web_search';
+      id: string;
+      query?: string;
+      actionType?: string;
+      resultCount?: number;
+    }
+  | {
+      type: 'extension';
+      id: string;
+      /** Extension kind, e.g. `clock.sleep` */
+      extensionKind?: string;
+      query?: string;
+    };
+
+/** Fields of the record that carried a recorded item. */
+export interface CodexItemEnvelope {
+  /** e.g. `item_completed/FileChange`, `exec_command_end` */
+  recordType: string;
+  turnId?: string;
+  threadId?: string;
+  /** Provider start time (ms since epoch), when recorded */
+  startedAtMs?: number;
+  /** Provider completion time (ms since epoch), when recorded */
+  completedAtMs?: number;
 }
 
 export type CodexEvent =
@@ -41,15 +96,7 @@ export type CodexEvent =
   | { kind: 'turn_complete'; turnId?: string; error?: string; durationMs?: number }
   | { kind: 'turn_aborted'; turnId?: string; reason?: string; durationMs?: number }
   | { kind: 'context_compacted' }
-  | { kind: 'command_result'; result: CodexCommandResult }
-  | {
-      kind: 'patch_result';
-      callId: string;
-      success?: boolean;
-      stdout?: string;
-      stderr?: string;
-    }
-  | { kind: 'mcp_result'; callId: string; durationMs?: number; isError: boolean; error?: string }
+  | { kind: 'recorded_item'; item: CodexRecordedItem; envelope: CodexItemEnvelope }
   | { kind: 'ignored'; type: string };
 
 /**
@@ -94,52 +141,85 @@ export function parseCodexEvent(payload: Record<string, unknown>): CodexEvent {
     case 'context_compacted':
       return { kind: 'context_compacted' };
     case 'exec_command_end': {
-      const result = parseCommandResult(payload, str(payload.call_id));
-      return result ? { kind: 'command_result', result } : { kind: 'ignored', type };
+      const item = parseCommandItem(payload, str(payload.call_id));
+      return item ? recorded(item, type, payload) : { kind: 'ignored', type };
     }
     case 'patch_apply_end': {
-      const callId = str(payload.call_id);
-      if (!callId) {
+      const id = str(payload.call_id);
+      if (!id) {
         return { kind: 'ignored', type };
       }
-      return {
-        kind: 'patch_result',
-        callId,
-        success: typeof payload.success === 'boolean' ? payload.success : undefined,
-        stdout: str(payload.stdout),
-        stderr: str(payload.stderr),
-      };
+      const success = typeof payload.success === 'boolean' ? payload.success : undefined;
+      return recorded(
+        {
+          type: 'file_change',
+          id,
+          status: success === undefined ? undefined : success ? 'completed' : 'failed',
+          files: isRecord(payload.changes) ? Object.keys(payload.changes) : [],
+          stdout: str(payload.stdout),
+          stderr: str(payload.stderr),
+        },
+        type,
+        payload
+      );
     }
     case 'mcp_tool_call_end': {
-      const callId = str(payload.call_id);
-      if (!callId) {
+      const id = str(payload.call_id);
+      if (!id) {
         return { kind: 'ignored', type };
       }
       const outcome = describeMcpResult(payload.result);
-      return {
-        kind: 'mcp_result',
-        callId,
-        durationMs: durationToMs(payload.duration),
-        isError: outcome.isError,
-        error: outcome.error,
-      };
+      const invocation = isRecord(payload.invocation) ? payload.invocation : {};
+      return recorded(
+        {
+          type: 'mcp',
+          id,
+          server: str(invocation.server),
+          tool: str(invocation.tool),
+          arguments: invocation.arguments,
+          durationMs: durationToMs(payload.duration),
+          isError: outcome.isError,
+          error: outcome.error,
+        },
+        type,
+        payload
+      );
     }
     case 'item_completed':
-      return parseCompletedItem(payload.item);
+      return parseCompletedItem(payload);
     default:
       return { kind: 'ignored', type };
   }
 }
 
+function recorded(
+  item: CodexRecordedItem,
+  recordType: string,
+  payload: Record<string, unknown>
+): CodexEvent {
+  return {
+    kind: 'recorded_item',
+    item,
+    envelope: {
+      recordType,
+      turnId: str(payload.turn_id),
+      threadId: str(payload.thread_id),
+      startedAtMs: positiveNum(payload.started_at_ms),
+      completedAtMs: positiveNum(payload.completed_at_ms),
+    },
+  };
+}
+
 /**
- * Parse a `TurnItem` from an `item_completed` event.
+ * Parse the `TurnItem` of an `item_completed` event.
  */
-function parseCompletedItem(item: unknown): CodexEvent {
-  if (!item || typeof item !== 'object') {
+function parseCompletedItem(payload: Record<string, unknown>): CodexEvent {
+  const record = isRecord(payload.item) ? payload.item : undefined;
+  if (!record) {
     return { kind: 'ignored', type: 'item_completed' };
   }
-  const record = item as Record<string, unknown>;
   const itemType = str(record.type) ?? '';
+  const recordType = `item_completed/${itemType || 'unknown'}`;
 
   switch (itemType) {
     case 'UserMessage': {
@@ -175,52 +255,95 @@ function parseCompletedItem(item: unknown): CodexEvent {
         content: stringArray(record.raw_content),
       };
     case 'CommandExecution': {
-      const result = parseCommandResult(record, str(record.id));
-      return result ? { kind: 'command_result', result } : { kind: 'ignored', type: itemType };
+      const item = parseCommandItem(record, str(record.id));
+      return item ? recorded(item, recordType, payload) : { kind: 'ignored', type: itemType };
     }
     case 'FileChange': {
-      const callId = str(record.id);
-      if (!callId) {
+      const id = str(record.id);
+      if (!id) {
         return { kind: 'ignored', type: itemType };
       }
-      const status = str(record.status);
-      return {
-        kind: 'patch_result',
-        callId,
-        success: status === undefined ? undefined : status === 'completed',
-        stdout: str(record.stdout),
-        stderr: str(record.stderr),
-      };
+      return recorded(
+        {
+          type: 'file_change',
+          id,
+          status: str(record.status),
+          files: isRecord(record.changes) ? Object.keys(record.changes) : [],
+          stdout: str(record.stdout),
+          stderr: str(record.stderr),
+        },
+        recordType,
+        payload
+      );
     }
     case 'McpToolCall': {
-      const callId = str(record.id);
-      if (!callId) {
+      const id = str(record.id);
+      if (!id) {
         return { kind: 'ignored', type: itemType };
       }
       const status = str(record.status);
       const errorMessage = describeError(record.error);
       const resultIsError =
-        !!record.result &&
-        typeof record.result === 'object' &&
-        (record.result as { isError?: unknown; is_error?: unknown }).isError === true;
-      return {
-        kind: 'mcp_result',
-        callId,
-        durationMs: durationToMs(record.duration),
-        isError: status === 'failed' || errorMessage !== undefined || resultIsError,
-        error: errorMessage,
-      };
+        isRecord(record.result) &&
+        (record.result.isError === true || record.result.is_error === true);
+      return recorded(
+        {
+          type: 'mcp',
+          id,
+          server: str(record.server),
+          tool: str(record.tool),
+          arguments: record.arguments,
+          status,
+          durationMs: durationToMs(record.duration),
+          isError: status === 'failed' || errorMessage !== undefined || resultIsError,
+          error: errorMessage,
+        },
+        recordType,
+        payload
+      );
     }
+    case 'WebSearch': {
+      const id = str(record.id);
+      if (!id) {
+        return { kind: 'ignored', type: itemType };
+      }
+      const action = isRecord(record.action) ? record.action : {};
+      return recorded(
+        {
+          type: 'web_search',
+          id,
+          query: str(record.query),
+          actionType: str(action.type),
+          resultCount: Array.isArray(record.results) ? record.results.length : undefined,
+        },
+        recordType,
+        payload
+      );
+    }
+    case 'Extension': {
+      const id = str(record.id);
+      if (!id) {
+        return { kind: 'ignored', type: itemType };
+      }
+      return recorded(
+        { type: 'extension', id, extensionKind: str(record.kind), query: str(record.query) },
+        recordType,
+        payload
+      );
+    }
+    // Recognized and deliberately not rendered (see docs/codex-real-validation):
+    // ContextCompaction duplicates the `compacted` record; SubAgentActivity and
+    // CollabAgentToolCall describe multi-agent state whose links are unverified.
     default:
       return { kind: 'ignored', type: itemType || 'item_completed' };
   }
 }
 
-function parseCommandResult(
+function parseCommandItem(
   record: Record<string, unknown>,
-  callId: string | undefined
-): CodexCommandResult | null {
-  if (!callId) {
+  id: string | undefined
+): CodexRecordedItem | null {
+  if (!id) {
     return null;
   }
   const command = Array.isArray(record.command)
@@ -229,7 +352,8 @@ function parseCommandResult(
   const output =
     str(record.formatted_output) ?? str(record.aggregated_output) ?? joinStreams(record);
   return {
-    callId,
+    type: 'command',
+    id,
     command,
     cwd: pathFromUri(record.cwd),
     source: str(record.source),
@@ -343,4 +467,14 @@ function str(value: unknown): string | undefined {
 
 function num(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** Provider timestamps; old rollouts default missing ones to 0. */
+function positiveNum(value: unknown): number | undefined {
+  const n = num(value);
+  return n !== undefined && n > 0 ? n : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

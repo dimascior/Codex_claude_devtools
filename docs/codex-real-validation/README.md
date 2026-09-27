@@ -69,6 +69,12 @@ Counts derived from it are a snapshot and may differ slightly between files in t
       records with a leading-underscore key (`_evidence_window`) are
       synthetic; everything else is a verbatim sanitized record.
 
+`parser-findings.md`
+    Analysis of the Codex parser against this evidence: findings table,
+    correlation classes, the three real anomaly classes, schema coverage,
+    the changes made and a before/after survey on the committed fixtures.
+    Regression tests: `test/main/providers/codex/realObserved.test.ts`.
+
 Tooling (not evidence):
     `scripts/codex-rollout-transcript.ts` is the sanitizer that produced the
     `real-observed` fixtures. `test/scripts/codexRolloutTranscript.test.ts`

@@ -26,6 +26,11 @@ export interface CodexSessionMetadata {
   parentThreadId?: string;
   agentNickname?: string;
   agentRole?: string;
+  /**
+   * First envelope ordinal of a subagent's own history. Records with a lower
+   * ordinal were copied from the parent thread when the subagent was spawned.
+   */
+  historyStartOrdinal?: number;
 }
 
 /**
@@ -50,7 +55,29 @@ export function parseSessionMeta(payload: Record<string, unknown>): CodexSession
     parentThreadId: str(meta.parent_thread_id) ?? source.parentThreadId ?? str(meta.forked_from_id),
     agentNickname: str(meta.agent_nickname) ?? source.agentNickname,
     agentRole: str(meta.agent_role) ?? str(meta.agent_type) ?? source.agentRole,
+    historyStartOrdinal: positiveInteger(meta.subagent_history_start_ordinal),
   };
+}
+
+/**
+ * Whether a record was inherited from the parent thread (it precedes the
+ * subagent's own history). Records without an ordinal cannot be placed and
+ * count as the session's own.
+ */
+export function isInheritedRecord(
+  ordinal: number | undefined,
+  metadata: Pick<CodexSessionMetadata, 'historyStartOrdinal'>
+): boolean {
+  return (
+    ordinal !== undefined &&
+    ordinal > 0 &&
+    metadata.historyStartOrdinal !== undefined &&
+    ordinal < metadata.historyStartOrdinal
+  );
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 interface SessionSourceDescription {
