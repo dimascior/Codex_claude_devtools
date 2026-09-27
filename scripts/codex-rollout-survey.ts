@@ -10,8 +10,10 @@
  * The report never contains message text, commands, outputs, code, file paths
  * or working directories: strings are reduced to type names, schema field
  * names, enum values and the words the Codex harness writes in output
- * headers. It does contain tool names (including MCP tools), model names and
- * rollout file names: review it before sharing.
+ * headers. Model names are replaced by `<model-N>` aliases (numbered per
+ * report, most frequent first; sanitized transcripts keep their own). It does
+ * contain tool names (including MCP tools), model provider ids and rollout
+ * file names: review it before sharing.
  *
  * Usage (from the repository root):
  *   pnpm exec tsx scripts/codex-rollout-survey.ts [--max-files N | --all] [--sessions DIR] [--out FILE]
@@ -302,6 +304,11 @@ function keySet(value: Record<string, unknown>): string {
   return `{${shown.join(', ')}${suffix}}`;
 }
 
+/** A model name, or the alias a sanitized transcript already carries. */
+function modelValue(value: unknown): string {
+  return typeof value === 'string' && /^<model-\d+>$/.test(value) ? value : enumValue(value);
+}
+
 /** Value of an enum-like field; anything that looks like free text is hidden. */
 function enumValue(value: unknown): string {
   if (value === undefined || value === null) {
@@ -577,7 +584,7 @@ function surveyLine(line: string, where: Where, context: FileContext, survey: Su
       break;
     case 'turn_context':
       survey.t('turnContext').add(`fields ${keySet(payload)}`, where);
-      survey.t('turnContext').add(`model ${enumValue(payload.model)}`, where);
+      survey.t('turnContext').add(`model ${modelValue(payload.model)}`, where);
       break;
     case 'response_item':
       surveyItem(payload, where, context, survey);
@@ -1109,10 +1116,33 @@ function factsTable(rows: [string, string][]): string[] {
   return ['| | |', '|---|---|', ...rows.map(([key, value]) => `| ${key} | ${cell(value)} |`), ''];
 }
 
+/**
+ * Row labels `model <name>` → `model <model-N>`, numbered in the order the rows
+ * appear (most frequent first). Unreleased or custom model names never reach
+ * the report.
+ */
+function modelAliases(): (key: string) => string {
+  const aliases = new Map<string, string>();
+  return (key) => {
+    const name = /^model (.+)$/.exec(key)?.[1];
+    if (name === undefined || name.startsWith('(') || /^<model-\d+>$/.test(name)) return key;
+    let alias = aliases.get(name);
+    if (alias === undefined) {
+      alias = `<model-${aliases.size + 1}>`;
+      aliases.set(name, alias);
+    }
+    return `model ${alias}`;
+  };
+}
+
 function tallyTable(
   tallies: Tallies,
   heading: string,
-  options: { examples?: 'all' | 'flagged'; notes?: Record<string, string> } = {}
+  options: {
+    examples?: 'all' | 'flagged';
+    notes?: Record<string, string>;
+    label?: (key: string) => string;
+  } = {}
 ): string[] {
   if (tallies.size === 0) {
     return [];
@@ -1133,7 +1163,8 @@ function tallyTable(
   const lines = [`#### ${heading}`, '', `| ${header.join(' | ')} |`, `|${align.join('|')}|`];
   for (const [key, tally] of rows.slice(0, MAX_ROWS)) {
     const note = options.notes?.[key];
-    const label = note ? `${key} — ${note}` : key;
+    const shown = options.label ? options.label(key) : key;
+    const label = note ? `${shown} — ${note}` : shown;
     let row = `| ${cell(label)} | ${tally.count} |${withFiles ? ` ${tally.files} |` : ''}`;
     if (withExamples) {
       const flagged = options.examples === 'all' || /\((unknown|not rendered)\)/.test(key);
@@ -1159,7 +1190,7 @@ function renderReport(input: ReportInput): string {
     ''
   );
   out.push(
-    '> No message text, commands, outputs, code, file paths or working directories. Tool names, model names and rollout file names are included: review before sharing.',
+    '> No message text, commands, outputs, code, file paths or working directories. Model names are replaced by `<model-N>` aliases. Tool names, model provider ids and rollout file names are included: review before sharing.',
     ''
   );
 
@@ -1288,7 +1319,7 @@ function renderReport(input: ReportInput): string {
   out.push(
     ...tallyTable(t('sessionMeta'), 'session_meta (instructions and tool lists are not read)')
   );
-  out.push(...tallyTable(t('turnContext'), 'turn_context'));
+  out.push(...tallyTable(t('turnContext'), 'turn_context', { label: modelAliases() }));
   out.push(...tallyTable(t('compacted'), 'compacted (history fields are not read)'));
 
   out.push('## Response items', '');

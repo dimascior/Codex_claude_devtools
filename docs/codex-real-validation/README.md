@@ -81,7 +81,7 @@ Counts derived from it are a snapshot and may differ slightly between files in t
     - `current-code-mode-correlation-windows.jsonl`: eight contiguous slices
       of the newest rollout preserving order around exec calls. Separator
       records with a leading-underscore key (`_evidence_window`) are
-      synthetic; everything else is a verbatim sanitized record.
+      synthetic; everything else is a sanitized record.
     - `subagent-declared-boundary.jsonl`: one complete subagent rollout whose
       declared `subagent_history_start_ordinal` is correct (two session_meta
       records; boundary at the subagent's `thread_settings_applied`).
@@ -100,23 +100,41 @@ Counts derived from it are a snapshot and may differ slightly between files in t
 Tooling (not evidence):
     `scripts/codex-rollout-transcript.ts` is the sanitizer that produced the
     `real-observed` fixtures. `test/scripts/codexRolloutTranscript.test.ts`
-    checks that commands, outputs, cwd, paths, URLs and `parsed_cmd`
-    name/path cannot survive it, and re-scans the committed fixtures against
-    the same allowlist. The script demonstrates how the evidence was
-    reduced; it says nothing about Codex behaviour by itself.
+    checks that commands, outputs, cwd, paths, URLs, `parsed_cmd` name/path,
+    chosen agent, task, role and tool names and model names cannot survive
+    it, and that every committed fixture is unchanged by the current rules
+    (so nothing the sanitizer would replace or alias is committed). The
+    script demonstrates how the evidence was reduced; it says nothing about
+    Codex behaviour by itself.
 
 Synthetic fixtures elsewhere in the test suite:
     Developer-created regression material. They must not be treated as proof of compatibility with the actual Codex installations.
 
-## Sanitizer contract
+## Sanitizer contract (version 2)
 
 Each transcript line is `{"line": N, "bytes": B, ...record}` where `line` is the
 1-based line number in the real rollout and `bytes` is the raw line length.
+Headers carry `sanitizer_version`.
 
-Preserved: record type, payload type, ordering, timestamps, ordinals, all IDs
-(`id`, `call_id`, `turn_id`, `thread_id`, `session_id`, ...), status, role,
-phase, tool `name`, model names, enum-like settings, numeric values, booleans,
-and content-item `type` values.
+Preserved, when the value has the shape its key allows: record type, payload
+type, ordering, ordinals, ISO timestamps, CLI versions, provider-generated ids
+(UUIDs, `call_…`/`ws_…`/`rs_…`-style opaque ids, counters such as `item-17`,
+built-in `:…` ids), status, role, phase, single-token enum settings, model
+provider ids Codex defines (`openai`, `ollama`, `lmstudio`, `amazon-bedrock…`),
+tool names and namespaces that Codex defines (built-in tools, `clock`,
+`collaboration`, `web`, `mcp__node_repl`, `mcp__cua_repl`,
+`mcp__codex_apps…`), numeric values, booleans and content-item `type`
+values. A value with spaces, path separators or a URL under one of these keys
+becomes `<string:N>`.
+
+Aliased (deterministic within one transcript; equal values get equal aliases,
+the alias says nothing else): agent paths keep the root (`/root`) and alias
+every segment below it (`/root/<task-1>`), task names (`<task-N>`), agent
+nicknames (`<agent-N>`), agent roles (`<role-N>`), tool names and MCP servers
+Codex does not define (`<tool-N>`, `mcp__<server-N>`), model identifiers
+(`model`, `from_model`, `to_model`: `<model-N>`), other model provider ids
+(`<provider-N>`), ids that are not provider-generated (`<id-N>`) and object
+keys that are not plain identifiers (`<key-N>`).
 
 Replaced: every other string becomes `<string:N>` (N = original length);
 omitted arrays/objects become `<array:N>` / `<object:N>`. This covers message
@@ -124,9 +142,14 @@ text, reasoning, arguments, inputs, outputs, stdout/stderr, commands, cwd,
 paths, URLs, git info, and `parsed_cmd` entries (only their `type` is kept).
 Arrays other than `content` are truncated to 12 items.
 
-In the committed fixtures, agent nicknames, inter-agent task names and model
-names are also replaced by deterministic aliases (`<agent-1>`,
-`/root/<task-1>`, `<model-1>`; equal values get equal aliases within a file).
+`--resanitize TRANSCRIPT` applies these rules to an existing transcript,
+keeping `line`, `bytes`, placeholders, aliases and `_evidence_*` separators.
+The committed fixtures were produced by version 1 and brought to version 2
+this way, because the raw rollouts are not available outside the evidence
+machine: agent nicknames, inter-agent recipients and model names were
+aliased, and values version 1 had already reduced (such as `agent_path`) stay
+`<string:N>`. Regenerating a fixture from its raw rollout with version 2
+aliases those as well.
 
 ## Interpretation caution
 

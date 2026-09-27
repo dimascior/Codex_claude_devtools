@@ -291,9 +291,10 @@ describe('real-observed fixtures: forked subagent rollout', () => {
   it('titles the subagent with its task name, never with an inherited prompt', () => {
     // The task arrives as an inter-agent message (line 168) right after
     // inter_agent_communication_metadata with trigger_turn (line 167). Its
-    // readable text is only the task header (90 characters, the length of
-    // upstream's NEW_TASK header for this author and recipient); the task
-    // itself is encrypted. The user messages in this file are the parent's.
+    // readable text is only the task header: 90 characters, upstream's
+    // NEW_TASK header for author "/root" and a 32-character recipient, the
+    // length of this thread's own agent_path. The task itself is encrypted.
+    // The fixture aliases the task name; the user messages are the parent's.
     expect(session.title).toBe('<task-1>');
     expect(session.titleSource).toBe('agent_task');
     const task = session.timeline.find((entry) => entry.kind === 'agent_message');
@@ -365,7 +366,8 @@ describe('real-observed fixtures: subagent with a correct declared boundary', ()
   it('titles the subagent with its task name, not the parent prompts it inherited', () => {
     // Lines 10 and 15 are the parent's user messages, inside the prefix. The
     // task message (line 23, after trigger_turn metadata on line 22) has 91
-    // readable characters: upstream's NEW_TASK header for its recipient.
+    // readable characters: upstream's NEW_TASK header for a 33-character
+    // recipient, the length of this thread's own agent_path.
     expect(session.title).toBe('<task-1>');
     expect(session.titleSource).toBe('agent_task');
   });
