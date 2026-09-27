@@ -2,20 +2,27 @@
  * Standalone (non-Electron) entry point for claude-devtools.
  *
  * Runs the HTTP server + API without Electron, suitable for Docker
- * or any headless/remote environment. The renderer is served as
+ * or any headless environment. The renderer is served as
  * static files over HTTP.
  *
+ * Local-only by default: it binds to 127.0.0.1 and answers only loopback Host
+ * names. Serving other machines is an explicit choice (HOST, ALLOWED_HOSTS) and
+ * has no authentication.
+ *
  * Environment variables:
- * - HOST: Bind address (default '0.0.0.0')
+ * - HOST: Bind address (default '127.0.0.1'; Docker images set '0.0.0.0')
+ * - ALLOWED_HOSTS: Comma-separated host names to answer besides the loopback
+ *   names (default none)
  * - PORT: Listen port (default 3456)
  * - CLAUDE_ROOT: Path to .claude directory (default ~/.claude)
  * - CODEX_HOME: Path to the Codex home directory (default ~/.codex)
- * - CORS_ORIGIN: CORS origin policy (default '*')
+ * - CORS_ORIGIN: CORS origin policy (default: localhost origins only)
  */
 
 import { createLogger } from '@shared/utils/logger';
 import * as path from 'path';
 
+import { resolveStandaloneNetworkConfig } from './http/hostPolicy';
 import { HttpServer } from './services/infrastructure/HttpServer';
 import {
   getProjectsBasePath,
@@ -40,14 +47,9 @@ const logger = createLogger('Standalone');
 // Configuration
 // =============================================================================
 
-const HOST = process.env.HOST ?? '0.0.0.0';
+const { host: HOST, allowedHosts: ALLOWED_HOSTS } = resolveStandaloneNetworkConfig(process.env);
 const PORT = parseInt(process.env.PORT ?? '3456', 10);
 const CLAUDE_ROOT = process.env.CLAUDE_ROOT;
-
-// Default CORS to allow all in standalone mode (Docker isolation replaces CORS)
-if (!process.env.CORS_ORIGIN) {
-  process.env.CORS_ORIGIN = '*';
-}
 
 // =============================================================================
 // Stub services (Electron-only features unavailable in standalone)
@@ -181,7 +183,9 @@ async function start(): Promise<void> {
   const modeSwitchHandler = async (): Promise<void> => {};
 
   // Start the server
-  const port = await httpServer.start(services, modeSwitchHandler, PORT, HOST);
+  const port = await httpServer.start(services, modeSwitchHandler, PORT, HOST, {
+    allowedHosts: ALLOWED_HOSTS,
+  });
   logger.info(`Standalone server running at http://${HOST}:${port}`);
   // Always print the URL regardless of log level so users know where to connect
   const displayHost = HOST === '0.0.0.0' || HOST === '::' ? 'localhost' : HOST;

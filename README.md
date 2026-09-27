@@ -177,7 +177,7 @@ claude-devtools does **not** wrap, modify, or interfere with Claude Code. It rea
 
 ## Docker / Standalone Deployment
 
-Run without Electron — in Docker, on a remote server, or anywhere Node.js runs.
+Run without Electron, in Docker or anywhere Node.js runs. The server is local-only by default (see [Local HTTP trust boundary](#local-http-trust-boundary)).
 
 ```bash
 docker compose up
@@ -188,17 +188,29 @@ Or manually:
 
 ```bash
 docker build -t claude-devtools .
-docker run -p 3456:3456 -v ~/.claude:/data/.claude:ro claude-devtools
+docker run -p 127.0.0.1:3456:3456 -v ~/.claude:/data/.claude:ro claude-devtools
 ```
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CLAUDE_ROOT` | `~/.claude` | Path to the `.claude` data directory |
 | `CODEX_HOME` | `~/.codex` | Codex home directory (rollouts are read from `sessions/`). In Docker, mount it read-only, e.g. `-v ~/.codex:/data/.codex:ro -e CODEX_HOME=/data/.codex` |
-| `HOST` | `0.0.0.0` | Bind address |
+| `HOST` | `127.0.0.1` | Bind address. The Docker image sets `0.0.0.0` inside the container; `docker compose` and the command above publish the port on the host's loopback only |
+| `ALLOWED_HOSTS` | *(none)* | Comma-separated host names the server answers besides `localhost`, `127.0.0.0/8` and `[::1]` |
+| `CORS_ORIGIN` | localhost origins | Cross-origin policy; `*` allows any web page to read the API |
 | `PORT` | `3456` | Listen port |
 
-The standalone server has **zero** outbound network calls. For maximum isolation: `docker run --network none -p 3456:3456 -v ~/.claude:/data/.claude:ro claude-devtools`. See [SECURITY.md](SECURITY.md).
+The standalone server has **zero** outbound network calls. For maximum isolation: `docker run --network none -p 127.0.0.1:3456:3456 -v ~/.claude:/data/.claude:ro claude-devtools`. See [SECURITY.md](SECURITY.md).
+
+### Local HTTP trust boundary
+
+The HTTP server (standalone mode, or the in-app server when enabled in settings) serves your session data: prompts, commands, outputs and file contents. It has no authentication, so it is local-only by default:
+
+- it binds to `127.0.0.1` (the in-app server always does; standalone mode unless `HOST` says otherwise);
+- it answers only requests whose `Host` header is `localhost`, a `127.0.0.0/8` address or `[::1]`, plus any `ALLOWED_HOSTS`. Other requests, such as a web page that points its own domain at `127.0.0.1` (DNS rebinding), get `403` before any route runs;
+- cross-origin reads are limited to localhost origins unless `CORS_ORIGIN` is set.
+
+Remote serving without authentication is out of scope for this project. Serving other machines (`HOST=0.0.0.0` with `ALLOWED_HOSTS`, or publishing the Docker port on all interfaces) is an explicit choice: anyone who can reach the port can read every session. Put it behind your own authenticating proxy if you need that.
 
 ---
 
