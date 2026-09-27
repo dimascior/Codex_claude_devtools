@@ -28,7 +28,7 @@ import { parseCodexEvent } from './CodexEventParser';
 import { CodexExecutionParser, type ExecutionContext } from './CodexExecutionParser';
 import {
   type CodexSessionMetadata,
-  isInheritedRecord,
+  InheritedHistoryTracker,
   isInjectedContext,
   parseSessionMeta,
   toPreview,
@@ -105,6 +105,7 @@ export function normalizeCodexRollout(
   let currentTurnStartLine = 0;
   let lastReasoningEventLine = -1;
   let inherited: InheritedContextEntry | undefined;
+  const inheritedTracker = new InheritedHistoryTracker();
 
   const entries: TimelineEntry[] = [];
   const eventUserMessages: UserMessageEntry[] = [];
@@ -140,7 +141,7 @@ export function normalizeCodexRollout(
     }
     const base = { timestamp: record.timestamp ?? lastTimestamp, lineNumber: record.lineNumber };
 
-    if (isInheritedRecord(record.ordinal, metadata)) {
+    if (inheritedTracker.isInherited(record, metadata)) {
       inherited ??= {
         kind: 'inherited_context',
         id: `i-${record.lineNumber}`,

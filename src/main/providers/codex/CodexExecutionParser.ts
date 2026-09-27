@@ -134,8 +134,17 @@ export class CodexExecutionParser {
           this.fromToolSearchCall(record, item, context),
           str(item.call_id) ?? str(item.id)
         );
-      case 'web_search_call':
-        return this.register(this.fromWebSearchCall(record, item, context), str(item.id));
+      case 'web_search_call': {
+        const id = str(item.id);
+        // Hosted search: the WebSearch item is persisted one record before its
+        // call (25/25 real cases), so the call may find its item already known.
+        const prior = id ? this.byItemId.get(id) : undefined;
+        if (prior && prior.evidence.observed?.kind !== 'call') {
+          this.adoptWebSearchCall(prior, record, item, id);
+          return undefined;
+        }
+        return this.register(this.fromWebSearchCall(record, item, context), id);
+      }
       case 'image_generation_call':
         return this.register(this.fromImageGenerationCall(record, item, context), str(item.id));
       default:
@@ -510,6 +519,32 @@ export class CodexExecutionParser {
       exec.evidence.result = evidence;
     }
     return exec;
+  }
+
+  /**
+   * Link a hosted `web_search_call` to the WebSearch item recorded before it.
+   */
+  private adoptWebSearchCall(
+    draft: Execution,
+    record: CodexRolloutRecord,
+    item: Record<string, unknown>,
+    id: string | undefined
+  ): void {
+    const action = isRecord(item.action) ? item.action : {};
+    draft.evidence.observed = recordEvidence('call', 'web_search_call', record, id);
+    draft.evidence.cellLink = {
+      method: 'explicit_id',
+      detail: 'Item recorded one record before its call; linked by web_search_call.id',
+    };
+    draft.args = action;
+    draft.command ??= describeWebSearchAction(action);
+    draft.turnId ??= passthroughTurnId(item);
+    if (mapHostedStatus(str(item.status)) === 'failed') {
+      draft.status = 'failed';
+    }
+    if (id) {
+      this.byCallId.set(id, draft);
+    }
   }
 
   private fromImageGenerationCall(

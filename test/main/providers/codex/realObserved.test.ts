@@ -236,24 +236,33 @@ describe('real-observed fixtures: forked subagent rollout', () => {
   const records = loadRecords('subagent-thread-spawn.jsonl');
   const session = normalizeCodexRollout(records, { active: false });
 
-  it('treats records before subagent_history_start_ordinal as inherited parent history', () => {
+  it('ends the inherited prefix at the first record of the subagent\'s own history', () => {
     expect(session.metadata).toMatchObject({
       threadId: '01a0a8c9-2bb8-7920-a65b-c88be2bc900f',
       parentThreadId: '01a09d90-2086-7f92-9e12-670bc277cf90',
       historyStartOrdinal: 171,
     });
+    // The declared boundary (171) equals the record count, as in 10 of the 22
+    // real subagent rollouts. The prefix therefore ends at the first
+    // `thread_settings_applied` for this thread (line 162, ordinal 161); the
+    // subagent's own turn (task_started at line 163, minted after the thread
+    // id) is kept: the inter-agent task message and the abort that ended it.
     expect(session.timeline).toEqual([
       expect.objectContaining({
         kind: 'inherited_context',
         lineNumber: 2,
-        lastLineNumber: 171,
-        recordCount: 170,
+        lastLineNumber: 161,
+        recordCount: 160,
         parentThreadId: '01a09d90-2086-7f92-9e12-670bc277cf90',
       }),
+      expect.objectContaining({ kind: 'agent_message', lineNumber: 168 }),
+      expect.objectContaining({ kind: 'turn_event', lineNumber: 171 }),
     ]);
     expect(session.executions).toEqual([]);
+    // The task arrives as an inter-agent message, not a user message.
     expect(session.title).toBeUndefined();
-    expect(session.tokenUsage).toBeUndefined();
+    expect(session.model).toBe('<model-2>');
+    expect(session.tokenUsage).toBeDefined();
     expect(session.turnInProgress).toBe(false);
   });
 
@@ -276,12 +285,77 @@ describe('real-observed fixtures: forked subagent rollout', () => {
       expect(list.sessions[0]).toMatchObject({
         parentThreadId: '01a09d90-2086-7f92-9e12-670bc277cf90',
         agentNickname: '<agent-1>',
-        inheritedRecordCount: 170,
+        inheritedRecordCount: 160,
+        model: '<model-2>',
       });
-      // Every user message and turn_context in this file belongs to the parent.
+      // Every user message in this file belongs to the parent; the subagent's
+      // own turn_context (line 166) supplies the model.
       expect(list.sessions[0].title).toBeUndefined();
-      expect(list.sessions[0].model).toBeUndefined();
     });
+  });
+});
+
+describe('real-observed fixtures: subagent with a correct declared boundary', () => {
+  const records = loadRecords('subagent-declared-boundary.jsonl');
+  const session = normalizeCodexRollout(records, { active: false });
+
+  it('ends the inherited prefix exactly at subagent_history_start_ordinal', () => {
+    // Two session_meta records: the subagent's own (ordinal 0) and a copy of
+    // the parent's (ordinal 1). The boundary (16) is the thread_settings_applied
+    // event for the subagent's thread; its first own turn starts at ordinal 17.
+    expect(session.metadata).toMatchObject({
+      threadId: '01a08b56-a905-7712-bb7e-f2747c374a39',
+      parentThreadId: '01a07967-8252-7b21-8524-3164700549b1',
+      historyStartOrdinal: 16,
+    });
+    expect(session.timeline[0]).toEqual(
+      expect.objectContaining({
+        kind: 'inherited_context',
+        lineNumber: 2,
+        lastLineNumber: 16,
+        recordCount: 15,
+      })
+    );
+    const own = session.timeline.slice(1);
+    expect(own.length).toBeGreaterThan(0);
+    for (const entry of own) {
+      expect(entry.lineNumber).toBeGreaterThanOrEqual(17);
+    }
+    expect(session.model).toBe('<model-1>');
+  });
+});
+
+describe('real-observed fixtures: hosted web search', () => {
+  const records = loadRecords('hosted-web-search-windows.jsonl');
+  const session = normalizeCodexRollout(records, { active: false });
+  const list = executionsOf(session.timeline);
+
+  it('links a WebSearch item to the web_search_call recorded one record after it', () => {
+    // cli 0.142.5: item.id == web_search_call.id (15/15 in the real rollout).
+    const linked = list.filter((exec) => exec.evidence.cellLink?.method === 'explicit_id');
+    expect(linked).toHaveLength(10);
+    for (const exec of linked) {
+      expect(exec.kind).toBe('web_search');
+      expect(exec.evidence.observed?.recordId).toBe(exec.evidence.result?.recordId);
+      expect(exec.evidence.observed?.recordType).toBe('web_search_call');
+      expect(exec.evidence.result?.recordType).toBe('item_completed/WebSearch');
+      expect(exec.evidence.observed?.lineNumber).toBe(exec.evidence.result!.lineNumber + 1);
+      expect(exec.status).toBe('completed');
+    }
+    // The pair at lines 155/156 is one execution, not two.
+    expect(list.filter((exec) => exec.lineNumber === 155 || exec.lineNumber === 156)).toHaveLength(1);
+  });
+
+  it('keeps calls without an id and their items apart', () => {
+    // cli 0.137.0-alpha.4: web_search_call has no id, so no identifier links it
+    // to the WebSearch item recorded one record earlier.
+    const older = list.filter((exec) => exec.lineNumber >= 146 && exec.lineNumber <= 153);
+    const calls = older.filter((exec) => exec.evidence.observed?.recordType === 'web_search_call');
+    const items = older.filter((exec) => exec.evidence.result?.recordType === 'item_completed/WebSearch');
+    expect(calls).toHaveLength(3);
+    expect(items).toHaveLength(3);
+    for (const call of calls) expect(call.evidence.observed?.recordId).toBeUndefined();
+    for (const item of items) expect(item.evidence.cellLink?.method).toBe('unresolved');
   });
 });
 

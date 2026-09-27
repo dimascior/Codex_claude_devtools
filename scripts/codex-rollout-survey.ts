@@ -902,6 +902,7 @@ function evidenceClass(exec: Execution): string {
     return 'listed as attempted (inventory), no result';
   if (callSiteLink?.method === 'content') return 'script call site + recorded item (content link)';
   if (cellLink?.method === 'turn_window') return 'recorded item attributed by turn and order';
+  if (cellLink?.method === 'explicit_id') return 'call + recorded item linked by id';
   if (cellLink?.method === 'unresolved') {
     const what =
       observed?.kind === 'item' ? 'recorded item' : `${observed?.kind ?? 'unknown'} record`;

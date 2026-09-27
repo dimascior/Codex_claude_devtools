@@ -58,6 +58,13 @@ Counts derived from it are a snapshot and may differ slightly between files in t
     shared between exec calls, function calls and item_completed events,
     and where correspondence is only chronological.
 
+`local-full-corpus-verification-2026-09-27.md`
+    Verification of the parser at 7f38892 against all 58 raw rollouts:
+    before/after survey, Claude's seven local-only questions answered from
+    raw data, turn-window and subagent-boundary measurements, and the two
+    parser defects found and corrected (subagent boundary, hosted web
+    search item-before-call).
+
 `../../tests/fixtures/codex/real-observed/*.jsonl`
     Sanitized structural records derived from real rollout records.
     - `subagent-thread-spawn.jsonl`: one complete 171-line subagent rollout
@@ -68,6 +75,14 @@ Counts derived from it are a snapshot and may differ slightly between files in t
       of the newest rollout preserving order around exec calls. Separator
       records with a leading-underscore key (`_evidence_window`) are
       synthetic; everything else is a verbatim sanitized record.
+    - `subagent-declared-boundary.jsonl`: one complete subagent rollout whose
+      declared `subagent_history_start_ordinal` is correct (two session_meta
+      records; boundary at the subagent's `thread_settings_applied`).
+      `subagent-thread-spawn.jsonl` is the other real pattern: the declared
+      boundary equals the record count.
+    - `hosted-web-search-windows.jsonl`: hosted `web_search_call` records and
+      the WebSearch items persisted one record before them, with (cli 0.142.5)
+      and without (cli 0.137) matching ids.
 
 `parser-findings.md`
     Analysis of the Codex parser against this evidence: findings table,

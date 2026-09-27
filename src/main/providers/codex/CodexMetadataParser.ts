@@ -10,7 +10,7 @@
 
 import { trimTrailingSeparators } from './codexPaths';
 
-import type { CodexSessionMetaPayload } from './types';
+import type { CodexRolloutRecord, CodexSessionMetaPayload } from './types';
 
 export interface CodexSessionMetadata {
   threadId?: string;
@@ -74,6 +74,64 @@ export function isInheritedRecord(
     metadata.historyStartOrdinal !== undefined &&
     ordinal < metadata.historyStartOrdinal
   );
+}
+
+/**
+ * Streams records and decides which ones belong to the inherited prefix.
+ *
+ * `subagent_history_start_ordinal` marks the boundary correctly in 12 of the
+ * 22 real subagent rollouts. In the other 10 (cli 0.147.0-alpha.6.6 and some
+ * 0.153.0 rollouts) it equals the rollout's record count, so every record,
+ * including the subagent's own turns and tool calls, lies below it. The prefix
+ * therefore also ends at the first structural marker of the subagent's own
+ * history: a `thread_settings_applied` event for the rollout's own thread id,
+ * or a turn whose UUIDv7 turn id was minted after the rollout's own thread id.
+ * In every real rollout both markers sit at (or one record after) the declared
+ * boundary where it is correct, and no parent-era turn follows them.
+ */
+export class InheritedHistoryTracker {
+  private ownHistoryStarted = false;
+
+  isInherited(
+    record: Pick<CodexRolloutRecord, 'ordinal' | 'type' | 'payload'>,
+    metadata: Pick<CodexSessionMetadata, 'historyStartOrdinal' | 'threadId'>
+  ): boolean {
+    if (this.ownHistoryStarted || !isInheritedRecord(record.ordinal, metadata)) {
+      return false;
+    }
+    if (startsOwnHistory(record, metadata.threadId)) {
+      this.ownHistoryStarted = true;
+      return false;
+    }
+    return true;
+  }
+}
+
+function startsOwnHistory(
+  record: Pick<CodexRolloutRecord, 'type' | 'payload'>,
+  threadId: string | undefined
+): boolean {
+  const { payload } = record;
+  if (record.type === 'event_msg' && payload.type === 'thread_settings_applied') {
+    return threadId !== undefined && payload.thread_id === threadId;
+  }
+  if (
+    (record.type === 'event_msg' && payload.type === 'task_started') ||
+    record.type === 'turn_context'
+  ) {
+    const turnMinted = uuidV7Millis(str(payload.turn_id));
+    const threadMinted = uuidV7Millis(threadId);
+    return turnMinted !== undefined && threadMinted !== undefined && turnMinted >= threadMinted;
+  }
+  return false;
+}
+
+/** Millisecond timestamp embedded in a UUIDv7, or undefined for other ids. */
+export function uuidV7Millis(id: string | undefined): number | undefined {
+  if (!id || !/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-/i.test(id)) {
+    return undefined;
+  }
+  return parseInt(id.slice(0, 8) + id.slice(9, 13), 16);
 }
 
 function positiveInteger(value: unknown): number | undefined {
