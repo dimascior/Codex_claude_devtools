@@ -25,6 +25,7 @@ test/
 ├── fixtures/
 │   └── codex/           # Synthetic Codex rollouts (function calls, code mode, paginated, legacy)
 ├── main/
+│   ├── http/            # Host policy (loopback bind, Host allowlist)
 │   ├── ipc/             # IPC handler tests
 │   │   ├── configValidation.test.ts
 │   │   └── guards.test.ts
@@ -35,7 +36,7 @@ test/
 │   ├── services/        # Service tests
 │   │   ├── analysis/    (ChunkBuilder)
 │   │   ├── discovery/   (ProjectPathResolver, SessionSearcher)
-│   │   ├── infrastructure/ (FileWatcher)
+│   │   ├── infrastructure/ (FileWatcher, HttpServer local exposure)
 │   │   └── parsing/     (MessageClassifier, SessionParser)
 │   └── utils/           # Main process utilities
 │       ├── jsonl.test.ts
@@ -44,7 +45,7 @@ test/
 │       ├── regexValidation.test.ts
 │       └── tokenizer.test.ts
 ├── renderer/
-│   ├── components/      # Component helpers (codexFormatting, renderOutput)
+│   ├── components/      # Component helpers (codexFormatting, renderOutput, markdownImages)
 │   ├── hooks/           # Hook tests
 │   │   ├── navigationUtils.test.ts
 │   │   ├── useAutoScrollBottom.test.ts
@@ -63,6 +64,7 @@ test/
 │       ├── dateGrouping.test.ts
 │       ├── formatters.test.ts
 │       └── pathUtils.test.ts
+├── scripts/             # Fixture sanitizer contract (codexRolloutTranscript)
 ├── shared/
 │   └── utils/           # Shared utilities
 │       ├── markdownSearchRendererAlignment.test.ts

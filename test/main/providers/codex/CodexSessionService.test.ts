@@ -265,3 +265,80 @@ describe('Codex scanning and session details', () => {
     service.dispose();
   });
 });
+
+describe('Codex incremental parsing', () => {
+  const REAL_OBSERVED = path.resolve(__dirname, '../../../../tests/fixtures/codex/real-observed');
+  const SESSION_ID =
+    '2026/09/27/rollout-2026-09-27T10-00-00-01a0c000-0000-7000-8000-000000000001.jsonl';
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    tempDirs.length = 0;
+  });
+
+  /** Rollout bytes: a synthetic fixture, or the records of a real-derived transcript. */
+  function rolloutBytes(source: string): Buffer {
+    if (!source.startsWith('real:')) {
+      return fs.readFileSync(path.join(FIXTURES, source));
+    }
+    const lines = fs
+      .readFileSync(path.join(REAL_OBSERVED, source.slice('real:'.length)), 'utf8')
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((entry) => typeof entry.type === 'string' && typeof entry.line === 'number')
+      .map(({ line: _line, bytes: _bytes, ...record }) => JSON.stringify(record));
+    return Buffer.from(`${lines.join('\n')}\n`, 'utf8');
+  }
+
+  /**
+   * Byte offsets, in order: at a line boundary, inside a line (an unparsable
+   * tail), just before a newline (a complete record whose newline is not written
+   * yet), and at the end.
+   */
+  function cutPoints(bytes: Buffer): number[] {
+    const newlines: number[] = [];
+    for (let i = 0; i < bytes.length; i++) if (bytes[i] === 0x0a) newlines.push(i + 1);
+    const atLine = (fraction: number): number =>
+      newlines[Math.max(0, Math.floor(newlines.length * fraction) - 1)];
+    const inLine = atLine(0.4) + 7;
+    const beforeNewline = atLine(0.6) - 1;
+    return [...new Set([atLine(0.25), inLine, beforeNewline, atLine(0.8), bytes.length])]
+      .filter((cut) => cut > 0 && cut <= bytes.length)
+      .sort((a, b) => a - b);
+  }
+
+  it.each([
+    'function-calls.jsonl',
+    'code-mode.jsonl',
+    'paginated.jsonl',
+    'real:subagent-thread-spawn.jsonl',
+    'real:current-code-mode-correlation-windows.jsonl',
+    'real:hosted-web-search-windows.jsonl',
+  ])('matches a full parse after every append: %s', async (source) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-incremental-'));
+    tempDirs.push(home);
+    const sessionsDir = path.join(home, 'sessions');
+    const filePath = path.join(sessionsDir, ...SESSION_ID.split('/'));
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, '');
+
+    const bytes = rolloutBytes(source);
+    const incremental = new CodexSessionService({ sessionsDir, watch: false });
+    let written = 0;
+    for (const cut of cutPoints(bytes)) {
+      fs.appendFileSync(filePath, bytes.subarray(written, cut));
+      written = cut;
+      const fresh = new CodexSessionService({ sessionsDir, watch: false });
+      const expected = await fresh.getSessionDetail(SESSION_ID);
+      const actual = await incremental.getSessionDetail(SESSION_ID);
+      fresh.dispose();
+      expect(actual).toEqual(expected);
+      expect(actual).not.toBeNull();
+    }
+    incremental.dispose();
+  });
+});

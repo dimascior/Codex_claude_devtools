@@ -1,6 +1,6 @@
 # claude-devtools
 
-Electron app that visualizes Claude Code session execution (and Codex CLI rollouts via the Codex tab)
+Standalone viewer (Electron app + standalone HTTP server) for Claude Code and Codex session activity: it reads the session files those agents persist locally and shows what they did. Architecture: `docs/ARCHITECTURE.md`; planned work: `docs/ROADMAP.md`
 
 ## Tech Stack
 Electron 28.x, React 18.x, TypeScript 5.x, Tailwind CSS 3.x, Zustand 4.x
@@ -99,6 +99,11 @@ Codex CLI rollouts are parsed in `src/main/providers/codex/` and normalized into
 - **IPC**: `codex:listSessions`, `codex:getSessionDetail` (fingerprint → `{ unchanged: true }`), event `codex:session-change`; HTTP `/api/codex/*` + SSE in standalone mode
 - **Survey**: `pnpm exec tsx scripts/codex-rollout-survey.ts [--all]` runs the scanner/reader/normalizer over real rollouts and writes a content-free report (types, fields, evidence classes, anomalies by kind and CLI version, with line locations, timings); `--from-transcripts tests/fixtures/codex/real-observed` surveys sanitized transcripts. Use it to check a new Codex version before changing the parser
 - **Real evidence first**: `tests/fixtures/codex/real-observed/` (sanitized real records, `test/main/providers/codex/realObserved.test.ts`) outrank the synthetic fixtures in `test/fixtures/codex/`, which are regression tests, not compatibility proof
+
+## Privacy & Local HTTP
+- **HTTP server is local-only by default** (`src/main/http/hostPolicy.ts`): binds `127.0.0.1` (standalone `HOST` overrides), rejects any request whose `Host` is not `localhost` / `127.0.0.0/8` / `[::1]` / an `ALLOWED_HOSTS` entry with 403 before any route, CORS limited to localhost origins unless `CORS_ORIGIN` is set. No authentication exists; never make non-loopback serving a default
+- **Markdown images in session content are not fetched** (`MarkdownImage`): every `ReactMarkdown` component map renders them as links to open explicitly
+- **Real-derived fixtures** (`tests/fixtures/codex/real-observed/`) follow sanitizer contract v2 (`scripts/codex-rollout-transcript.ts`): free text → `<string:N>`, chosen names and model names → deterministic aliases (`/root/<task-1>`, `<agent-1>`, `<model-1>`). Regenerate or `--resanitize` through the script, never by hand; `test/scripts/codexRolloutTranscript.test.ts` fails if a committed fixture would change under the current rules
 
 ## Error Handling
 - Main: try/catch, console.error, return safe defaults

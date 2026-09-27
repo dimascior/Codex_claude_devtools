@@ -73,8 +73,10 @@ Evidence:
   `multi_agents_spec.rs:118`).
 - VERIFIED SANITIZED: in both subagent fixtures the task message directly
   follows `trigger_turn: true` metadata, and its readable text is 91 and 90
-  characters, exactly the length of the `NEW_TASK` header for its author and
-  recipient (the `MESSAGE` header would be one shorter).
+  characters, exactly the length of the `NEW_TASK` header for author `/root`
+  and a recipient as long as the thread's own `agent_path` (33 and 32
+  characters; the `MESSAGE` header would be one shorter). The fixtures alias
+  the task name itself (`/root/<task-1>`, sanitizer version 2).
 
 Rule (`SubagentTaskNameFinder`, used by both the normalizer and the scanner):
 for subagent sessions, the title is the last segment of the recipient path of
@@ -154,16 +156,18 @@ fails there.
   `@tanstack/react-virtual`, which the renderer conventions ask for lists of
   more than 100 items. The parsed-record cache holds up to 4 sessions
   regardless of size. Follow-up: virtualized timeline and session list,
-  structural sharing or incremental normalization, and a byte-bounded cache.
-- HTTP API. The Codex routes share the existing server's exposure: standalone
-  mode binds `0.0.0.0` without authentication by default; the in-app server
-  binds `127.0.0.1` and allows localhost origins only, but does not check the
-  `Host` header, so a DNS-rebinding page could read `/api/codex/*` as it could
-  the existing `/api/*` session routes. Follow-up: a `Host` allowlist for the
-  in-app server.
-- Sanitizer consistency. The fixtures keep `agent_message.author`/`recipient`
-  (agent paths that contain the task names) but replace the same path in
-  `session_meta.agent_path`. Confirm that task names are acceptable to publish.
+  structural sharing or incremental normalization, and a byte-bounded cache
+  (scoped in `docs/ROADMAP.md`).
+- HTTP API (resolved after this review). Standalone mode bound `0.0.0.0` and
+  allowed any CORS origin with credentials by default; neither server checked
+  the `Host` header, so a DNS-rebinding page could read `/api/*`. Both servers
+  now bind loopback by default, answer only loopback Host names or explicit
+  `ALLOWED_HOSTS`, and allow localhost origins only unless configured; see
+  "Local HTTP trust boundary" in `SECURITY.md`.
+- Sanitizer consistency (resolved after this review): the fixtures kept
+  `agent_message.author`/`recipient` and agent nicknames verbatim. Sanitizer
+  version 2 aliases them (`/root/<task-1>`, `<agent-1>`) and the committed
+  fixtures were re-sanitized; see the sanitizer contract in `README.md`.
 - The session list takes the model from the first own `turn_context`, the
   detail view from the last one.
 

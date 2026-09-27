@@ -159,7 +159,9 @@ System notifications for `.env` access, tool errors, high token usage, and custo
 
 ### Codex Sessions
 
-Open the **Codex** tab to inspect [Codex CLI](https://github.com/openai/codex) rollouts from `$CODEX_HOME/sessions` (default `~/.codex`, i.e. `%USERPROFILE%\.codex` on Windows). The live rollout is selected automatically and followed as it grows. Every `function_call`, `local_shell_call` and `custom_tool_call` is shown in order next to its output, with exit codes, durations and working directories. Code-mode `exec` cells show their nested commands as a tree. Rollouts are grouped by working directory, and compressed `.jsonl.zst` rollouts are read when the runtime supports zstd. Encrypted reasoning is marked unavailable and is never decoded.
+Open the **Codex** tab to inspect [Codex](https://github.com/openai/codex) rollouts (CLI, IDE extension and desktop app) from `$CODEX_HOME/sessions` (default `~/.codex`, i.e. `%USERPROFILE%\.codex` on Windows). The live rollout is selected automatically and followed as it grows. Every tool call — shell commands, patches, MCP calls, web searches, subagent tools — is shown in order with its output, status, exit code, duration and working directory. Code-mode `exec` cells show their nested operations as a tree, and the viewer marks which of them Codex actually recorded and which only appear in the cell's code. Operations without a recorded outcome stay "unknown" instead of looking successful. Subagent sessions are titled by their task name and summarize the history they inherited from their parent. Rollouts are grouped by working directory, and compressed `.jsonl.zst` rollouts are read when the runtime supports zstd. Encrypted reasoning and encrypted inter-agent payloads are never decoded.
+
+How the viewer is built — providers, the normalized session model, recorded vs inferred activity, live follow and the privacy model — is described in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); planned work is in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ### Command Palette & Multi-Pane Layout
 
@@ -171,7 +173,7 @@ Open the **Codex** tab to inspect [Codex CLI](https://github.com/openai/codex) r
 
 ## Not a Wrapper
 
-claude-devtools does **not** wrap, modify, or interfere with Claude Code. It reads session logs that already exist on your machine. Works with sessions from the terminal, IDEs, or any tool that uses Claude Code.
+claude-devtools does **not** wrap, modify, or interfere with Claude Code or Codex. It reads session logs that already exist on your machine. Works with sessions from the terminal, IDEs, or any tool that uses Claude Code or Codex.
 
 ---
 
@@ -254,7 +256,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. Please read our [Code of 
 
 ## Security
 
-IPC handlers validate all inputs with strict path containment checks. File reads are constrained to the project root and `~/.claude`. See [SECURITY.md](SECURITY.md).
+IPC handlers validate all inputs with strict path containment checks. File reads are constrained to the project root, `~/.claude` and `$CODEX_HOME/sessions`. The HTTP server is local-only by default ([Local HTTP trust boundary](#local-http-trust-boundary)). See [SECURITY.md](SECURITY.md).
 
 ## License
 
