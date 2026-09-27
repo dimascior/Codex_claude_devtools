@@ -15,6 +15,11 @@ import type {
 } from './notifications';
 import type { WaterfallData } from './visualization';
 import type {
+  AgentSessionChangeEvent,
+  AgentSessionDetailResponse,
+  AgentSessionList,
+} from '@main/domain';
+import type {
   ConversationGroup,
   FileChangeEvent,
   FindSessionByIdResult,
@@ -478,6 +483,28 @@ export interface ElectronAPI {
 
   // Memory API — per-project Claude memory viewer
   memory: MemoryAPI;
+
+  // Codex API — Codex CLI rollouts normalized into execution timelines
+  codex: CodexAPI;
+}
+
+// =============================================================================
+// Codex API types
+// =============================================================================
+
+export interface CodexAPI {
+  /** List rollouts under $CODEX_HOME/sessions, most recently written first */
+  listSessions: () => Promise<AgentSessionList>;
+  /**
+   * Normalized timeline for one rollout. Returns `{ unchanged }` when
+   * `knownFingerprint` is current, or null for unknown/invalid session ids.
+   */
+  getSessionDetail: (
+    sessionId: string,
+    knownFingerprint?: string
+  ) => Promise<AgentSessionDetailResponse | null>;
+  /** Rollout added/changed/removed */
+  onSessionChange: (callback: (event: AgentSessionChangeEvent) => void) => () => void;
 }
 
 // =============================================================================

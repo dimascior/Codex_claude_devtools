@@ -3,6 +3,9 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 import {
   APP_RELAUNCH,
+  CODEX_GET_SESSION_DETAIL,
+  CODEX_LIST_SESSIONS,
+  CODEX_SESSION_CHANGE,
   CONTEXT_CHANGED,
   CONTEXT_GET_ACTIVE,
   CONTEXT_LIST,
@@ -66,6 +69,9 @@ import {
 } from './constants/ipcChannels';
 
 import type {
+  AgentSessionChangeEvent,
+  AgentSessionDetailResponse,
+  AgentSessionList,
   AppConfig,
   ClaudeRootFolderSelection,
   ClaudeRootInfo,
@@ -522,6 +528,29 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on(MEMORY_CHANGED, listener);
       return (): void => {
         ipcRenderer.removeListener(MEMORY_CHANGED, listener);
+      };
+    },
+  },
+
+  // Codex API
+  codex: {
+    listSessions: (): Promise<AgentSessionList> =>
+      ipcRenderer.invoke(CODEX_LIST_SESSIONS) as Promise<AgentSessionList>,
+    getSessionDetail: (
+      sessionId: string,
+      knownFingerprint?: string
+    ): Promise<AgentSessionDetailResponse | null> =>
+      ipcRenderer.invoke(
+        CODEX_GET_SESSION_DETAIL,
+        sessionId,
+        knownFingerprint
+      ) as Promise<AgentSessionDetailResponse | null>,
+    onSessionChange: (callback: (event: AgentSessionChangeEvent) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, data: AgentSessionChangeEvent): void =>
+        callback(data);
+      ipcRenderer.on(CODEX_SESSION_CHANGE, listener);
+      return (): void => {
+        ipcRenderer.removeListener(CODEX_SESSION_CHANGE, listener);
       };
     },
   },

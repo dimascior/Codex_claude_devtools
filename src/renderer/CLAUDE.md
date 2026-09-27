@@ -18,6 +18,7 @@ React application running in Chromium.
 ```
 components/
 ├── chat/           # Chat display, message items, viewers, context panel
+├── codex/          # Codex rollout viewer (session list, timeline, execution tree)
 ├── common/         # Shared components (badges, dropdowns, token display)
 ├── dashboard/      # Dashboard views
 ├── layout/         # Layout components (headers, shells)

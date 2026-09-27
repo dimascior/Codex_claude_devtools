@@ -22,10 +22,14 @@ pnpm test:task-filtering  # Task tool filtering
 ## Test Structure
 ```
 test/
+├── fixtures/
+│   └── codex/           # Synthetic Codex rollouts (function calls, code mode, paginated, legacy)
 ├── main/
 │   ├── ipc/             # IPC handler tests
 │   │   ├── configValidation.test.ts
 │   │   └── guards.test.ts
+│   ├── providers/
+│   │   └── codex/       # Rollout parsing, normalization, output/command parsing, session service
 │   ├── services/        # Service tests
 │   │   ├── analysis/    (ChunkBuilder)
 │   │   ├── discovery/   (ProjectPathResolver, SessionSearcher)
@@ -38,12 +42,14 @@ test/
 │       ├── regexValidation.test.ts
 │       └── tokenizer.test.ts
 ├── renderer/
+│   ├── components/      # Component helpers (codexFormatting, renderOutput)
 │   ├── hooks/           # Hook tests
 │   │   ├── navigationUtils.test.ts
 │   │   ├── useAutoScrollBottom.test.ts
 │   │   ├── useSearchContextNavigation.test.ts
 │   │   └── useVisibleAIGroup.test.ts
 │   ├── store/           # Zustand store slices
+│   │   ├── codexSlice.test.ts
 │   │   ├── notificationSlice.test.ts
 │   │   ├── paneSlice.test.ts
 │   │   ├── pathResolution.test.ts
@@ -69,8 +75,10 @@ test/
 - `services/analysis/ChunkBuilder.ts` - Chunk building logic
 - `services/parsing/SessionParser.ts` - JSONL parsing
 - `services/parsing/MessageClassifier.ts` - Message classification
+- `providers/codex/*` - Codex rollout parsing and normalization (`test/main/providers/codex/`)
 - Store slices in `src/renderer/store/slices/`
 - Utility functions in `*/utils/`
 
 ## Test Data
 Test fixtures use real JSONL session data from `~/.claude/projects/`.
+Codex fixtures in `test/fixtures/codex/` are synthetic rollouts in the current envelope format (plus one legacy file).

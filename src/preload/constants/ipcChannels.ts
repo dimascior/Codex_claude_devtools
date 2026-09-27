@@ -210,5 +210,18 @@ export const MEMORY_COPY_PATH = 'memory:copyPath';
 /** Memory file change event (main → renderer) */
 export const MEMORY_CHANGED = 'memory:changed';
 
+// =============================================================================
+// Codex API Channels
+// =============================================================================
+
+/** List Codex rollouts ($CODEX_HOME/sessions) grouped by working directory */
+export const CODEX_LIST_SESSIONS = 'codex:listSessions';
+
+/** Get the normalized execution timeline of one Codex rollout */
+export const CODEX_GET_SESSION_DETAIL = 'codex:getSessionDetail';
+
+/** Codex rollout added/changed/removed (main → renderer) */
+export const CODEX_SESSION_CHANGE = 'codex:session-change';
+
 /** Find sessions whose IDs contain a given hex fragment */
 export const FIND_SESSIONS_BY_PARTIAL_ID = 'find-sessions-by-partial-id';

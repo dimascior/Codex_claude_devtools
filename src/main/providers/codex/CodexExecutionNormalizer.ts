@@ -1,0 +1,520 @@
+/**
+ * CodexExecutionNormalizer - Turns Codex rollout records into the
+ * provider-neutral session timeline.
+ *
+ * Rollouts often contain the same information twice (a response item and a
+ * legacy event, or a response item and a paginated `item_completed` event).
+ * Each timeline entry kind therefore has one preferred source and a fallback:
+ *
+ * | Entry          | Preferred source                        | Fallback                          |
+ * |----------------|-----------------------------------------|-----------------------------------|
+ * | User message   | `user_message` / `UserMessage` events   | `message` items with role `user`  |
+ * | Agent message  | `message` items with role `assistant`   | `agent_message` events            |
+ * | Reasoning      | `reasoning` items                       | `agent_reasoning` events          |
+ * | Executions     | tool call items + outputs               | —                                 |
+ *
+ * Reasoning is surfaced as its readable summary; encrypted reasoning content
+ * is reported as unavailable and never decoded.
+ */
+
+import { parseCodexEvent } from './CodexEventParser';
+import { CodexExecutionParser, type ExecutionContext } from './CodexExecutionParser';
+import {
+  type CodexSessionMetadata,
+  isInjectedContext,
+  parseSessionMeta,
+  toPreview,
+} from './CodexMetadataParser';
+
+import type { CodexRolloutRecord } from './types';
+import type {
+  AgentMessageEntry,
+  AgentTokenUsage,
+  CompactionEntry,
+  Execution,
+  ExecutionStats,
+  ReasoningEntry,
+  TimelineEntry,
+  UserMessageEntry,
+} from '@main/domain';
+
+export interface NormalizeOptions {
+  /** Whether the rollout is still being written; keeps the current turn's executions running */
+  active: boolean;
+}
+
+export interface NormalizedCodexSession {
+  metadata: CodexSessionMetadata;
+  model?: string;
+  /** First user request, as a preview */
+  title?: string;
+  timeline: TimelineEntry[];
+  executions: Execution[];
+  stats: ExecutionStats;
+  tokenUsage?: AgentTokenUsage;
+  /** Whether the last recorded turn started but has not finished */
+  turnInProgress: boolean;
+}
+
+/** Compaction markers this close together describe the same compaction. */
+const COMPACTION_MERGE_WINDOW = 5;
+
+const TOOL_CALL_TYPES = new Set([
+  'function_call',
+  'local_shell_call',
+  'custom_tool_call',
+  'tool_search_call',
+  'web_search_call',
+  'image_generation_call',
+]);
+
+const TOOL_OUTPUT_TYPES = new Set([
+  'function_call_output',
+  'custom_tool_call_output',
+  'tool_search_output',
+]);
+
+const COMPACTION_ITEM_TYPES = new Set(['compaction', 'compaction_summary', 'context_compaction']);
+
+/**
+ * Normalize a rollout's records into a session timeline.
+ */
+export function normalizeCodexRollout(
+  records: readonly CodexRolloutRecord[],
+  options: NormalizeOptions
+): NormalizedCodexSession {
+  const parser = new CodexExecutionParser();
+  let metadata: CodexSessionMetadata = {};
+  let haveMetadata = false;
+  let model: string | undefined;
+  let turnId: string | undefined;
+  let turnCwd: string | undefined;
+  let lastTimestamp: string | undefined;
+  let tokenUsage: AgentTokenUsage | undefined;
+  let turnInProgress = false;
+  let sawTurnEvents = false;
+  let currentTurnStartLine = 0;
+  let lastReasoningEventLine = -1;
+
+  const entries: TimelineEntry[] = [];
+  const eventUserMessages: UserMessageEntry[] = [];
+  const itemUserMessages: UserMessageEntry[] = [];
+  const itemAgentMessages: AgentMessageEntry[] = [];
+  const eventAgentMessages: AgentMessageEntry[] = [];
+  const itemReasoning: ReasoningEntry[] = [];
+  const eventReasoning: ReasoningEntry[] = [];
+  const compactions: CompactionEntry[] = [];
+
+  const context = (): ExecutionContext => ({
+    turnId,
+    cwd: turnCwd ?? metadata.cwd,
+    timestamp: lastTimestamp,
+  });
+
+  const pushExecution = (exec: Execution | undefined): void => {
+    if (exec) {
+      entries.push({
+        kind: 'execution',
+        id: `x-${exec.id}`,
+        timestamp: exec.timestamp || undefined,
+        lineNumber: exec.lineNumber,
+        turnId: exec.turnId,
+        execution: exec,
+      });
+    }
+  };
+
+  for (const record of records) {
+    if (record.timestamp) {
+      lastTimestamp = record.timestamp;
+    }
+    const base = { timestamp: record.timestamp ?? lastTimestamp, lineNumber: record.lineNumber };
+
+    switch (record.type) {
+      case 'session_meta':
+        if (!haveMetadata) {
+          metadata = parseSessionMeta(record.payload);
+          haveMetadata = true;
+          // Legacy rollouts have no per-line timestamps; start from the session's.
+          lastTimestamp ??= metadata.startedAt;
+        }
+        break;
+
+      case 'turn_context': {
+        turnCwd = str(record.payload.cwd) ?? turnCwd;
+        model = str(record.payload.model) ?? model;
+        turnId = str(record.payload.turn_id) ?? turnId;
+        break;
+      }
+
+      case 'compacted':
+        compactions.push({
+          kind: 'compaction',
+          id: `c-${record.lineNumber}`,
+          ...base,
+          summary: str(record.payload.message),
+          encrypted: false,
+        });
+        break;
+
+      case 'response_item': {
+        const item = record.payload;
+        const type = str(item.type) ?? '';
+
+        if (TOOL_CALL_TYPES.has(type)) {
+          pushExecution(parser.handleCall(record, item, context()));
+        } else if (TOOL_OUTPUT_TYPES.has(type)) {
+          pushExecution(parser.handleOutput(record, item, context()));
+        } else if (type === 'message') {
+          const role = str(item.role);
+          const { text, imageCount } = messageText(item.content, role === 'user');
+          if (role === 'user') {
+            if (text || imageCount > 0) {
+              itemUserMessages.push({
+                kind: 'user_message',
+                id: `u-${record.lineNumber}`,
+                ...base,
+                turnId,
+                text,
+                imageCount: imageCount || undefined,
+              });
+            }
+          } else if (role === 'assistant' && text) {
+            itemAgentMessages.push({
+              kind: 'agent_message',
+              id: `a-${record.lineNumber}`,
+              ...base,
+              turnId,
+              text,
+              phase: messagePhase(item.phase),
+            });
+          }
+        } else if (type === 'agent_message') {
+          const { text, encrypted } = agentMessageText(item.content);
+          itemAgentMessages.push({
+            kind: 'agent_message',
+            id: `a-${record.lineNumber}`,
+            ...base,
+            turnId,
+            text: text || (encrypted ? '[encrypted message]' : ''),
+            author: str(item.author),
+            recipient: str(item.recipient),
+          });
+        } else if (type === 'reasoning') {
+          const summary = contentTexts(item.summary);
+          const content = contentTexts(item.content);
+          const encrypted =
+            typeof item.encrypted_content === 'string' && item.encrypted_content.length > 0;
+          if (summary.length > 0 || content.length > 0 || encrypted) {
+            itemReasoning.push({
+              kind: 'reasoning',
+              id: `r-${record.lineNumber}`,
+              ...base,
+              turnId,
+              summary,
+              content: content.length > 0 ? content : undefined,
+              encrypted,
+            });
+          }
+        } else if (COMPACTION_ITEM_TYPES.has(type)) {
+          compactions.push({
+            kind: 'compaction',
+            id: `c-${record.lineNumber}`,
+            ...base,
+            encrypted: typeof item.encrypted_content === 'string',
+          });
+        }
+        break;
+      }
+
+      case 'event_msg': {
+        const event = parseCodexEvent(record.payload);
+        switch (event.kind) {
+          case 'user_message':
+            if (event.text.trim() || event.imageCount > 0) {
+              eventUserMessages.push({
+                kind: 'user_message',
+                id: `u-${record.lineNumber}`,
+                ...base,
+                turnId,
+                text: event.text,
+                imageCount: event.imageCount || undefined,
+              });
+            }
+            break;
+          case 'agent_message':
+            if (event.text.trim()) {
+              eventAgentMessages.push({
+                kind: 'agent_message',
+                id: `a-${record.lineNumber}`,
+                ...base,
+                turnId,
+                text: event.text,
+                phase: messagePhase(event.phase),
+              });
+            }
+            break;
+          case 'agent_reasoning': {
+            if (!event.text.trim()) break;
+            // Reasoning events on consecutive lines are sections of one block.
+            const previous =
+              eventReasoning.length > 0 ? eventReasoning[eventReasoning.length - 1] : undefined;
+            const continues = lastReasoningEventLine === record.lineNumber - 1;
+            lastReasoningEventLine = record.lineNumber;
+            if (previous && continues) {
+              if (event.raw) {
+                previous.content = [...(previous.content ?? []), event.text];
+              } else {
+                previous.summary = [...previous.summary, event.text];
+              }
+            } else {
+              eventReasoning.push({
+                kind: 'reasoning',
+                id: `r-${record.lineNumber}`,
+                ...base,
+                turnId,
+                summary: event.raw ? [] : [event.text],
+                content: event.raw ? [event.text] : undefined,
+                encrypted: false,
+              });
+            }
+            break;
+          }
+          case 'reasoning_item':
+            if (event.summary.length > 0 || event.content.length > 0) {
+              eventReasoning.push({
+                kind: 'reasoning',
+                id: `r-${record.lineNumber}`,
+                ...base,
+                turnId,
+                summary: event.summary,
+                content: event.content.length > 0 ? event.content : undefined,
+                encrypted: false,
+              });
+            }
+            break;
+          case 'token_count':
+            tokenUsage = event.usage;
+            break;
+          case 'turn_started':
+            sawTurnEvents = true;
+            turnInProgress = true;
+            currentTurnStartLine = record.lineNumber;
+            turnId = event.turnId ?? turnId;
+            break;
+          case 'turn_complete':
+            sawTurnEvents = true;
+            turnInProgress = false;
+            if (event.error) {
+              entries.push({
+                kind: 'turn_event',
+                id: `t-${record.lineNumber}`,
+                ...base,
+                turnId: event.turnId ?? turnId,
+                event: 'failed',
+                reason: event.error,
+                durationMs: event.durationMs,
+              });
+            }
+            break;
+          case 'turn_aborted':
+            sawTurnEvents = true;
+            turnInProgress = false;
+            parser.interruptTurn(event.turnId ?? turnId);
+            entries.push({
+              kind: 'turn_event',
+              id: `t-${record.lineNumber}`,
+              ...base,
+              turnId: event.turnId ?? turnId,
+              event: 'aborted',
+              reason: event.reason,
+              durationMs: event.durationMs,
+            });
+            break;
+          case 'context_compacted':
+            compactions.push({
+              kind: 'compaction',
+              id: `c-${record.lineNumber}`,
+              ...base,
+              encrypted: false,
+            });
+            break;
+          case 'command_result':
+            pushExecution(parser.handleCommandResult(event.result, record, context()));
+            break;
+          case 'patch_result':
+            parser.handlePatchResult(event.callId, event.success, event.stderr, event.stdout);
+            break;
+          case 'mcp_result':
+            parser.handleMcpResult(event.callId, event.durationMs, event.isError, event.error);
+            break;
+          case 'ignored':
+            break;
+        }
+        break;
+      }
+
+      default:
+        break;
+    }
+  }
+
+  if (!sawTurnEvents) {
+    // Without turn events, an actively written rollout is assumed mid-turn.
+    turnInProgress = options.active;
+  }
+  parser.finalize(
+    options.active && turnInProgress ? currentTurnStartLine : Number.POSITIVE_INFINITY
+  );
+
+  const userMessages = eventUserMessages.length > 0 ? eventUserMessages : itemUserMessages;
+  const agentMessages = itemAgentMessages.length > 0 ? itemAgentMessages : eventAgentMessages;
+  const reasoning = itemReasoning.length > 0 ? itemReasoning : eventReasoning;
+
+  const timeline: TimelineEntry[] = [
+    ...entries,
+    ...userMessages,
+    ...agentMessages,
+    ...reasoning,
+    ...mergeCompactions(compactions),
+  ];
+  // File order is chronological; the sort is stable for entries from one line.
+  timeline.sort((a, b) => a.lineNumber - b.lineNumber);
+
+  const executions = parser.getExecutions();
+  const firstRequest = userMessages.find((message) => message.text.trim());
+
+  return {
+    metadata,
+    model,
+    title: firstRequest ? toPreview(firstRequest.text) : undefined,
+    timeline,
+    executions,
+    stats: computeExecutionStats(executions),
+    tokenUsage,
+    turnInProgress: options.active && turnInProgress,
+  };
+}
+
+/**
+ * Count executions by kind and status (nested executions included).
+ */
+function computeExecutionStats(executions: readonly Execution[]): ExecutionStats {
+  const stats: ExecutionStats = {
+    total: executions.length,
+    commands: 0,
+    nested: 0,
+    failed: 0,
+    running: 0,
+    declined: 0,
+    interrupted: 0,
+    byKind: {},
+  };
+  const visit = (exec: Execution, nested: boolean): void => {
+    stats.byKind[exec.kind] = (stats.byKind[exec.kind] ?? 0) + 1;
+    if (exec.kind === 'command') stats.commands++;
+    if (nested) stats.nested++;
+    if (exec.status === 'failed') stats.failed++;
+    if (exec.status === 'running') stats.running++;
+    if (exec.status === 'declined') stats.declined++;
+    if (exec.status === 'interrupted') stats.interrupted++;
+    for (const child of exec.children ?? []) {
+      visit(child, true);
+    }
+  };
+  for (const exec of executions) {
+    visit(exec, false);
+  }
+  return stats;
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+/**
+ * Text of a `message` item. For user messages, harness-injected context
+ * blocks are dropped part by part.
+ */
+function messageText(
+  content: unknown,
+  dropInjected: boolean
+): { text: string; imageCount: number } {
+  if (typeof content === 'string') {
+    return {
+      text: dropInjected && isInjectedContext(content) ? '' : content.trim(),
+      imageCount: 0,
+    };
+  }
+  if (!Array.isArray(content)) {
+    return { text: '', imageCount: 0 };
+  }
+  const parts: string[] = [];
+  let imageCount = 0;
+  for (const part of content) {
+    if (!part || typeof part !== 'object') continue;
+    const { type, text } = part as { type?: unknown; text?: unknown };
+    if (
+      (type === 'input_text' || type === 'output_text' || type === 'text') &&
+      typeof text === 'string'
+    ) {
+      if (dropInjected && isInjectedContext(text)) continue;
+      parts.push(text);
+    } else if (type === 'input_image') {
+      imageCount++;
+    }
+  }
+  return { text: parts.join('\n').trim(), imageCount };
+}
+
+function agentMessageText(content: unknown): { text: string; encrypted: boolean } {
+  if (!Array.isArray(content)) {
+    return { text: '', encrypted: false };
+  }
+  const parts: string[] = [];
+  let encrypted = false;
+  for (const part of content) {
+    if (!part || typeof part !== 'object') continue;
+    const { type, text } = part as { type?: unknown; text?: unknown };
+    if (type === 'encrypted_content') {
+      encrypted = true;
+    } else if (typeof text === 'string') {
+      parts.push(text);
+    }
+  }
+  return { text: parts.join('\n').trim(), encrypted };
+}
+
+function contentTexts(content: unknown): string[] {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content
+    .map((part) =>
+      part && typeof part === 'object' ? (part as { text?: unknown }).text : undefined
+    )
+    .filter((text): text is string => typeof text === 'string' && text.trim().length > 0);
+}
+
+function messagePhase(phase: unknown): AgentMessageEntry['phase'] {
+  return phase === 'commentary' || phase === 'final_answer' ? phase : undefined;
+}
+
+function mergeCompactions(markers: CompactionEntry[]): CompactionEntry[] {
+  const sorted = [...markers].sort((a, b) => a.lineNumber - b.lineNumber);
+  const merged: CompactionEntry[] = [];
+  for (const marker of sorted) {
+    const previous = merged[merged.length - 1];
+    if (previous && marker.lineNumber - previous.lineNumber <= COMPACTION_MERGE_WINDOW) {
+      previous.summary ??= marker.summary;
+      previous.encrypted ||= marker.encrypted;
+      continue;
+    }
+    merged.push({ ...marker });
+  }
+  return merged;
+}
+
+function str(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}

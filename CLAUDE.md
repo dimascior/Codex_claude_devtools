@@ -1,6 +1,6 @@
 # claude-devtools
 
-Electron app that visualizes Claude Code session execution
+Electron app that visualizes Claude Code session execution (and Codex CLI rollouts via the Codex tab)
 
 ## Tech Stack
 Electron 28.x, React 18.x, TypeScript 5.x, Tailwind CSS 3.x, Zustand 4.x
@@ -33,8 +33,10 @@ Use path aliases for imports:
 ## Data Sources
 ~/.claude/projects/{encoded-path}/*.jsonl - Session files
 ~/.claude/todos/{sessionId}.json - Todo data
+$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl[.zst] - Codex rollouts (`CODEX_HOME` defaults to `~/.codex`)
 
 Path encoding: `/Users/name/project` → `-Users-name-project`
+Codex rollouts are grouped by the `cwd` in their `session_meta`, not by date directory.
 
 ## Critical Concepts
 
@@ -79,6 +81,16 @@ Tracks what consumes tokens in Claude's context window across 6 categories (disc
 - **Tracker**: `src/renderer/utils/contextTracker.ts` — `computeContextStats()`, `processSessionContextWithPhases()`
 - **Context Phases**: Compaction events reset accumulated injections, tracked via `ContextPhaseInfo`
 - **Display surfaces**: `ContextBadge` (per-turn popover), `TokenUsageDisplay` (hover breakdown), `SessionContextPanel` (full panel)
+
+### Codex Provider
+Codex CLI rollouts are parsed in `src/main/providers/codex/` and normalized into the provider-neutral domain in `src/main/domain/` (`Execution`, `TimelineEntry`, `AgentSessionDetail`).
+- **Pipeline**: `CodexScanner` (discovery, live detection) → `CodexRolloutParser` (envelope + legacy lines, incremental byte offsets, `.zst`) → `normalizeCodexRollout()` (+ `CodexExecutionParser`, `CodexEventParser`, `CodexMetadataParser`) → `CodexSessionService` (cache, fingerprints, watcher)
+- **Three call generations**: `function_call` (`exec_command`/`shell`, `write_stdin` polls), `local_shell_call` (direct argv), code mode (`custom_tool_call` named `exec` whose JS calls `tools.exec_command(...)`; `wait` resumes a yielded cell)
+- **Code cells are never flattened**: nested calls become `Execution.children` — from `executed_tool_calls` passthrough metadata when recorded (`childrenSource: 'recorded'`), else from static analysis of the script (`'script'`)
+- **Reasoning**: only the readable summary is shown; `encrypted_content` is stripped at parse time and never decoded
+- **Live rollout**: modified within 10 minutes; `turnInProgress` from the tail of the file. The renderer follows it (`codexFollowLive`) until the user picks another session
+- **IPC**: `codex:listSessions`, `codex:getSessionDetail` (fingerprint → `{ unchanged: true }`), event `codex:session-change`; HTTP `/api/codex/*` + SSE in standalone mode
+- **Survey**: `pnpm exec tsx scripts/codex-rollout-survey.ts [--all]` runs the scanner/reader/normalizer over real rollouts and writes a content-free report (types, fields, anomalies with line locations, timings); use it to check a new Codex version before changing the parser
 
 ## Error Handling
 - Main: try/catch, console.error, return safe defaults

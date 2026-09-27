@@ -7,6 +7,9 @@
  */
 
 import type {
+  AgentSessionChangeEvent,
+  AgentSessionDetailResponse,
+  AgentSessionList,
   AppConfig,
   ClaudeMdFileInfo,
   ClaudeRootFolderSelection,
@@ -113,21 +116,28 @@ export class HttpAPIClient implements ElectronAPI {
     return value;
   }
 
-  private async parseJson<T>(res: Response): Promise<T> {
+  private async parseJson<T>(res: Response, reviveDates = true): Promise<T> {
     const text = await res.text();
     if (!res.ok) {
       const parsed = JSON.parse(text) as { error?: string };
       throw new Error(parsed.error ?? `HTTP ${res.status}`);
     }
+    if (!reviveDates) {
+      return JSON.parse(text) as T;
+    }
     return JSON.parse(text, (key, value) => HttpAPIClient.reviveDates(key, value)) as T;
   }
 
-  private async get<T>(path: string): Promise<T> {
+  /**
+   * GET a JSON endpoint. `reviveDates: false` keeps ISO timestamps as strings
+   * (for payloads whose contract uses strings, e.g. the Codex domain types).
+   */
+  private async get<T>(path: string, options: { reviveDates?: boolean } = {}): Promise<T> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
       const res = await fetch(`${this.baseUrl}${path}`, { signal: controller.signal });
-      return this.parseJson<T>(res);
+      return this.parseJson<T>(res, options.reviveDates ?? true);
     } finally {
       clearTimeout(timeout);
     }
@@ -642,6 +652,31 @@ export class HttpAPIClient implements ElectronAPI {
       (_callback: (event: { projectId: string }) => void): (() => void) =>
       // No file-watching push from HTTP server in v1 — return a no-op unsubscribe.
       (): void => {},
+  };
+
+  // Codex API — rollouts are read by the server; changes arrive over SSE.
+  codex: ElectronAPI['codex'] = {
+    listSessions: (): Promise<AgentSessionList> =>
+      this.get<AgentSessionList>('/api/codex/sessions', { reviveDates: false }),
+    getSessionDetail: (
+      sessionId: string,
+      knownFingerprint?: string
+    ): Promise<AgentSessionDetailResponse | null> => {
+      const params = new URLSearchParams({ id: sessionId });
+      if (knownFingerprint) {
+        params.set('fingerprint', knownFingerprint);
+      }
+      return this.get<AgentSessionDetailResponse | null>(
+        `/api/codex/session?${params.toString()}`,
+        {
+          reviveDates: false,
+        }
+      );
+    },
+    onSessionChange: (callback: (event: AgentSessionChangeEvent) => void): (() => void) =>
+      this.addEventListener('codex:session-change', (data: unknown) =>
+        callback(data as AgentSessionChangeEvent)
+      ),
   };
 
   // HTTP Server API — in browser mode, server is already running (we're using it)

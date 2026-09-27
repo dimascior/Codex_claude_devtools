@@ -24,6 +24,7 @@ import { join } from 'path';
 
 import { initializeIpcHandlers, removeIpcHandlers } from './ipc/handlers';
 import { getProjectsBasePath, getTodosBasePath } from './utils/pathDecoder';
+import { CodexSessionService } from './providers';
 
 // Dynamic renderer heap limit — proportional to system RAM so low-end devices
 // are not starved.  50% of total RAM, clamped to [2 GB, 4 GB].
@@ -57,6 +58,7 @@ const CONTEXT_CHANGED = 'context:changed';
 const HTTP_SERVER_START = 'httpServer:start';
 const HTTP_SERVER_STOP = 'httpServer:stop';
 const HTTP_SERVER_GET_STATUS = 'httpServer:getStatus';
+const CODEX_SESSION_CHANGE = 'codex:session-change';
 
 process.on('unhandledRejection', (reason) => {
   logger.error('Unhandled promise rejection in main process:', reason);
@@ -90,6 +92,7 @@ let notificationManager: NotificationManager;
 let updaterService: UpdaterService;
 let sshConnectionManager: SshConnectionManager;
 let httpServer: HttpServer;
+let codexSessionService: CodexSessionService;
 
 // File watcher event cleanup functions
 let fileChangeCleanup: (() => void) | null = null;
@@ -284,14 +287,30 @@ function initializeServices(): void {
   updaterService = new UpdaterService();
   httpServer = new HttpServer();
 
-  // Initialize IPC handlers with registry
-  initializeIpcHandlers(contextRegistry, updaterService, sshConnectionManager, {
-    rewire: rewireContextEvents,
-    full: onContextSwitched,
-    onClaudeRootPathUpdated: (_claudeRootPath: string | null) => {
-      reconfigureLocalContextForClaudeRoot();
-    },
+  // Codex sessions ($CODEX_HOME/sessions) are always read locally.
+  codexSessionService = new CodexSessionService();
+  codexSessionService.on('session-change', (event: unknown) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(CODEX_SESSION_CHANGE, event);
+    }
+    httpServer.broadcast(CODEX_SESSION_CHANGE, event);
   });
+  codexSessionService.start();
+
+  // Initialize IPC handlers with registry
+  initializeIpcHandlers(
+    contextRegistry,
+    updaterService,
+    sshConnectionManager,
+    {
+      rewire: rewireContextEvents,
+      full: onContextSwitched,
+      onClaudeRootPathUpdated: (_claudeRootPath: string | null) => {
+        reconfigureLocalContextForClaudeRoot();
+      },
+    },
+    codexSessionService
+  );
 
   // HTTP Server control IPC handlers
   ipcMain.handle(HTTP_SERVER_START, async () => {
@@ -378,6 +397,7 @@ async function startHttpServer(
         memoryReader: activeContext.memoryReader,
         updaterService,
         sshConnectionManager,
+        codexSessionService,
       },
       modeSwitchHandler,
       config.httpServer?.port ?? 3456
@@ -417,6 +437,11 @@ function shutdownServices(): void {
   // Dispose SSH connection manager
   if (sshConnectionManager) {
     sshConnectionManager.dispose();
+  }
+
+  // Stop watching Codex sessions
+  if (codexSessionService) {
+    codexSessionService.dispose();
   }
 
   // Remove IPC handlers

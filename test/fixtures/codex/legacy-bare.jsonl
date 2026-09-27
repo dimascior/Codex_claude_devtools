@@ -1,0 +1,7 @@
+{"id":"0198aaaa-bbbb-7ccc-8ddd-eeeeffff0000","timestamp":"2025-08-01T12:00:00.000Z","instructions":null,"git":{"branch":"dev"}}
+{"record_type":"state"}
+{"type":"message","role":"user","content":[{"type":"input_text","text":"<user_instructions>Be terse.</user_instructions>"}]}
+{"type":"message","role":"user","content":[{"type":"input_text","text":"list files"}]}
+{"type":"function_call","name":"shell","arguments":"{\"command\":[\"bash\",\"-lc\",\"ls -la\"]}","call_id":"call_old_1"}
+{"type":"function_call_output","call_id":"call_old_1","output":"{\"output\":\"total 0\\n\",\"metadata\":{\"exit_code\":0,\"duration_seconds\":0.1}}"}
+{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The directory is empty."}]}

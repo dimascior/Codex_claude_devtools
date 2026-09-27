@@ -157,6 +157,10 @@ See the moment your context hits the limit. Visualizes how context fills, compre
 System notifications for `.env` access, tool errors, high token usage, and custom regex patterns on any field.
 
 
+### Codex Sessions
+
+Open the **Codex** tab to inspect [Codex CLI](https://github.com/openai/codex) rollouts from `$CODEX_HOME/sessions` (default `~/.codex`, i.e. `%USERPROFILE%\.codex` on Windows). The live rollout is selected automatically and followed as it grows. Every `function_call`, `local_shell_call` and `custom_tool_call` is shown in order next to its output, with exit codes, durations and working directories. Code-mode `exec` cells show their nested commands as a tree. Rollouts are grouped by working directory, and compressed `.jsonl.zst` rollouts are read when the runtime supports zstd. Encrypted reasoning is marked unavailable and is never decoded.
+
 ### Command Palette & Multi-Pane Layout
 
 **Cmd+K** for cross-session search. Open multiple sessions side-by-side with drag-and-drop tabs.
@@ -190,6 +194,7 @@ docker run -p 3456:3456 -v ~/.claude:/data/.claude:ro claude-devtools
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CLAUDE_ROOT` | `~/.claude` | Path to the `.claude` data directory |
+| `CODEX_HOME` | `~/.codex` | Codex home directory (rollouts are read from `sessions/`). In Docker, mount it read-only, e.g. `-v ~/.codex:/data/.codex:ro -e CODEX_HOME=/data/.codex` |
 | `HOST` | `0.0.0.0` | Bind address |
 | `PORT` | `3456` | Listen port |
 

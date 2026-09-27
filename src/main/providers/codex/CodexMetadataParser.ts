@@ -1,0 +1,168 @@
+/**
+ * CodexMetadataParser - Session-level metadata from Codex rollouts.
+ *
+ * Responsibilities:
+ * - Read `session_meta` (thread id, cwd, originator, CLI version, source, git)
+ * - Describe the session source (`cli`, `vscode`, `exec`, sub-agents, …)
+ * - Derive project grouping keys and names from the working directory
+ * - Recognise harness-injected context blocks inside user messages
+ */
+
+import { trimTrailingSeparators } from './codexPaths';
+
+import type { CodexSessionMetaPayload } from './types';
+
+export interface CodexSessionMetadata {
+  threadId?: string;
+  startedAt?: string;
+  cwd?: string;
+  originator?: string;
+  cliVersion?: string;
+  source?: string;
+  modelProvider?: string;
+  gitBranch?: string;
+  gitCommit?: string;
+  repositoryUrl?: string;
+  parentThreadId?: string;
+  agentNickname?: string;
+  agentRole?: string;
+}
+
+/**
+ * Extract metadata from a `session_meta` payload.
+ */
+export function parseSessionMeta(payload: Record<string, unknown>): CodexSessionMetadata {
+  const meta = payload as CodexSessionMetaPayload;
+  const source = describeSessionSource(meta.source);
+  const git = meta.git && typeof meta.git === 'object' ? meta.git : undefined;
+
+  return {
+    threadId: str(meta.id) ?? str(meta.session_id),
+    startedAt: str(meta.timestamp),
+    cwd: str(meta.cwd),
+    originator: str(meta.originator),
+    cliVersion: str(meta.cli_version),
+    source: source.label,
+    modelProvider: str(meta.model_provider),
+    gitBranch: str(git?.branch),
+    gitCommit: str(git?.commit_hash),
+    repositoryUrl: str(git?.repository_url),
+    parentThreadId: str(meta.parent_thread_id) ?? source.parentThreadId ?? str(meta.forked_from_id),
+    agentNickname: str(meta.agent_nickname) ?? source.agentNickname,
+    agentRole: str(meta.agent_role) ?? str(meta.agent_type) ?? source.agentRole,
+  };
+}
+
+interface SessionSourceDescription {
+  label?: string;
+  parentThreadId?: string;
+  agentNickname?: string;
+  agentRole?: string;
+}
+
+/**
+ * Describe a serialized `SessionSource`:
+ * `"cli"`, `"vscode"`, `{"custom":"atlas"}`, `{"subagent":"review"}`,
+ * `{"subagent":{"thread_spawn":{"parent_thread_id":…,"agent_nickname":…}}}`.
+ */
+function describeSessionSource(source: unknown): SessionSourceDescription {
+  if (typeof source === 'string') {
+    return { label: source };
+  }
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    return {};
+  }
+  const [key, value] = Object.entries(source as Record<string, unknown>)[0] ?? [];
+  if (!key) {
+    return {};
+  }
+  if (key === 'custom' && typeof value === 'string') {
+    return { label: value };
+  }
+  if (key === 'subagent') {
+    if (typeof value === 'string') {
+      return { label: `subagent:${value}` };
+    }
+    if (value && typeof value === 'object') {
+      const [kind, details] = Object.entries(value as Record<string, unknown>)[0] ?? [];
+      const spawn =
+        details && typeof details === 'object' ? (details as Record<string, unknown>) : {};
+      return {
+        label: kind ? `subagent:${kind}` : 'subagent',
+        parentThreadId: str(spawn.parent_thread_id),
+        agentNickname: str(spawn.agent_nickname),
+        agentRole: str(spawn.agent_role) ?? str(spawn.agent_type),
+      };
+    }
+    return { label: 'subagent' };
+  }
+  return { label: key };
+}
+
+// =============================================================================
+// Project grouping
+// =============================================================================
+
+const UNKNOWN_PROJECT_KEY = '(unknown)';
+
+/**
+ * Stable grouping key for a working directory. Windows paths compare
+ * case-insensitively and with either separator.
+ */
+export function projectKeyForCwd(cwd: string | undefined): string {
+  if (!cwd?.trim()) {
+    return UNKNOWN_PROJECT_KEY;
+  }
+  const key = cwd.trim();
+  if (/^[a-zA-Z]:[\\/]/.test(key) || key.startsWith('\\\\')) {
+    return trimTrailingSeparators(key.replace(/\//g, '\\').toLowerCase());
+  }
+  return trimTrailingSeparators(key);
+}
+
+/**
+ * Display name for a working directory (its last path segment).
+ */
+export function projectNameForCwd(cwd: string | undefined): string {
+  if (!cwd?.trim()) {
+    return 'Unknown project';
+  }
+  const segments = cwd
+    .trim()
+    .split(/[\\/]+/)
+    .filter(Boolean);
+  return segments[segments.length - 1] ?? cwd;
+}
+
+// =============================================================================
+// User message classification
+// =============================================================================
+
+/**
+ * Harness-injected blocks that Codex records as `user` role messages but the
+ * user never typed (environment context, AGENTS.md instructions, …).
+ */
+export function isInjectedContext(text: string): boolean {
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith('# AGENTS.md instructions for ')) {
+    return true;
+  }
+  // `<tag>` or `<tag attr="…">` opening a block that closes with `</tag>`.
+  const open = /^<([a-zA-Z_][\w-]*)[\s>]/.exec(trimmed);
+  if (!open) {
+    return false;
+  }
+  return trimmed.trimEnd().endsWith(`</${open[1]}>`);
+}
+
+/**
+ * Collapse whitespace and cut a preview to `maxLength` characters.
+ */
+export function toPreview(text: string, maxLength = 200): string {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  return collapsed.length > maxLength ? `${collapsed.slice(0, maxLength - 1)}…` : collapsed;
+}
+
+function str(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}

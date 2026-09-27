@@ -39,6 +39,17 @@ components/
 │   ├── UserChatGroup.tsx    # User message display
 │   ├── markdownComponents.tsx # Custom markdown renderers
 │   └── searchHighlightUtils.ts # Search highlight utilities
+├── codex/                   # Codex rollout viewer (tab type 'codex')
+│   ├── CodexView            # Session list + timeline layout, periodic refresh
+│   ├── CodexSessionList     # Rollouts grouped by project, live dot, follow-live toggle
+│   ├── CodexSessionHeader   # Session badges, execution stats, tokens, timeline filter
+│   ├── CodexTimeline        # Chronological entries, auto-scroll while following live
+│   ├── CodexExecutionCard   # One execution (command, code cell, patch, tool)
+│   ├── CodexExecutionDetails # Facts grid, argv, script, patch, args, output
+│   ├── CodexNestedExecutions # Code-cell children as a tree
+│   ├── CodexStatusBadge / CodexOutputBlock / CodexPatchView
+│   ├── CodexMessageItem / CodexReasoningItem / CodexEventItem
+│   └── codexFormatting.ts   # Status labels, icons, summaries, filterTimeline
 ├── common/                  # Shared UI primitives
 │   ├── CopyButton           # Copy to clipboard button
 │   ├── CopyablePath         # Clickable, copyable file path

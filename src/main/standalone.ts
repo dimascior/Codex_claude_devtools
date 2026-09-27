@@ -9,6 +9,7 @@
  * - HOST: Bind address (default '0.0.0.0')
  * - PORT: Listen port (default 3456)
  * - CLAUDE_ROOT: Path to .claude directory (default ~/.claude)
+ * - CODEX_HOME: Path to the Codex home directory (default ~/.codex)
  * - CORS_ORIGIN: CORS origin policy (default '*')
  */
 
@@ -21,6 +22,7 @@ import {
   getTodosBasePath,
   setClaudeBasePathOverride,
 } from './utils/pathDecoder';
+import { CodexSessionService } from './providers';
 import {
   ConfigManager,
   LocalFileSystemProvider,
@@ -87,6 +89,7 @@ const sshConnectionManagerStub = {
 let localContext: ServiceContext;
 let notificationManager: NotificationManager;
 let httpServer: HttpServer;
+let codexSessionService: CodexSessionService;
 
 // =============================================================================
 // Lifecycle
@@ -142,6 +145,14 @@ async function start(): Promise<void> {
     httpServer.broadcast('memory:changed', event);
   });
 
+  // Codex sessions ($CODEX_HOME/sessions)
+  codexSessionService = new CodexSessionService();
+  codexSessionService.on('session-change', (event: unknown) => {
+    httpServer.broadcast('codex:session-change', event);
+  });
+  codexSessionService.start();
+  logger.info(`Codex sessions directory: ${codexSessionService.getSessionsDir()}`);
+
   // Forward notification events to SSE
   notificationManager.on('notification-new', (notification: unknown) => {
     httpServer.broadcast('notification:new', notification);
@@ -163,6 +174,7 @@ async function start(): Promise<void> {
     memoryReader: localContext.memoryReader,
     updaterService: updaterServiceStub,
     sshConnectionManager: sshConnectionManagerStub,
+    codexSessionService,
   };
 
   // No-op mode switch handler (no SSH in standalone)
@@ -186,6 +198,10 @@ async function shutdown(): Promise<void> {
 
   if (localContext) {
     localContext.dispose();
+  }
+
+  if (codexSessionService) {
+    codexSessionService.dispose();
   }
 
   logger.info('Shutdown complete');
