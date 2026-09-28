@@ -73,6 +73,7 @@ test/
 │       ├── modelParser.test.ts
 │       └── tokenFormatting.test.ts
 ├── mocks/               # Test fixtures and mocks
+├── moduleLayout.test.ts # No names/module names that differ only by case (Windows/macOS resolution)
 └── setup.ts             # Test setup/config
 ```
 

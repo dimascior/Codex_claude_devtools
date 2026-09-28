@@ -12,7 +12,7 @@ import {
   COLOR_TEXT_SECONDARY,
 } from '@renderer/constants/cssVariables';
 
-import { buildProvenance, provenanceClass } from './codexProvenance';
+import { buildProvenance, provenanceClass } from './codexProvenanceModel';
 
 import type { Execution } from '@shared/types';
 

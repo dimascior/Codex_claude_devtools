@@ -17,7 +17,7 @@ import {
   buildProvenance,
   CORRELATION_EXPLANATIONS,
   provenanceClass,
-} from '../../../src/renderer/components/codex/codexProvenance';
+} from '../../../src/renderer/components/codex/codexProvenanceModel';
 
 import type { Execution, RecordEvidence } from '../../../src/main/domain';
 import type { CodexRolloutRecord } from '../../../src/main/providers/codex/types';

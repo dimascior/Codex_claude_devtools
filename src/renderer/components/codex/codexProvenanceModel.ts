@@ -2,7 +2,8 @@
  * Provenance of an execution: its identity in the viewer, the provider
  * records behind it, the script call site it came from, and how they were
  * related. Built only from `Execution` fields and `evidence`; nothing here
- * adds a relation the parser did not record.
+ * adds a relation the parser did not record. Rendered by `CodexProvenance.tsx`
+ * (the names must not differ only by case: see test/moduleLayout.test.ts).
  */
 
 import { isStaticOnly } from '@shared/utils/executionEvidence';

@@ -47,7 +47,7 @@ components/
 │   ├── CodexExecutionCard   # One execution (command, code cell, file write, tool)
 │   ├── CodexExecutionDetails # Facts grid (incl. files written, Codex tags), provenance, argv, script, patch, args, output
 │   ├── CodexProvenance      # Domain id, provider records (type, provider id, line), script call site, correlation methods
-│   ├── codexProvenance.ts   # Provenance groups and evidence class, built from Execution.evidence only
+│   ├── codexProvenanceModel.ts # Provenance groups and evidence class, built from Execution.evidence only
 │   ├── CodexNestedExecutions # Code-cell children as a tree
 │   ├── CodexCommandActions  # Codex's recorded read / list / search tags (parsed_cmd)
 │   ├── CodexStatusBadge / CodexOutputBlock / CodexPatchView
