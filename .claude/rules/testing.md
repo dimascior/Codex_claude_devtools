@@ -46,7 +46,7 @@ test/
 │       ├── regexValidation.test.ts
 │       └── tokenizer.test.ts
 ├── renderer/
-│   ├── components/      # Component helpers (codexFormatting, renderOutput, markdownImages)
+│   ├── components/      # Component helpers (codexFormatting, codexProvenance, renderOutput, markdownImages)
 │   ├── hooks/           # Hook tests
 │   │   ├── navigationUtils.test.ts
 │   │   ├── useAutoScrollBottom.test.ts

@@ -1,7 +1,7 @@
 /**
  * CodexExecutionDetails - Expanded body of an execution: exact command,
- * execution facts (cwd, exit code, timing, ids, rollout lines, files written,
- * Codex's own command classification), input, output.
+ * execution facts (cwd, exit code, timing, files written, Codex's own command
+ * classification), provenance (ids, records, links), input, output.
  */
 
 import { CodeBlockViewer } from '@renderer/components/chat/viewers/CodeBlockViewer';
@@ -12,13 +12,13 @@ import { formatDuration } from '@renderer/utils/formatters';
 import {
   commandActionLabel,
   commandActionTarget,
-  describeEvidence,
   describeFileWrite,
   durationSourceLabel,
   generationLabel,
 } from './codexFormatting';
 import { CodexOutputBlock } from './CodexOutputBlock';
 import { CodexPatchView } from './CodexPatchView';
+import { CodexProvenance } from './CodexProvenance';
 
 import type { Execution } from '@shared/types';
 
@@ -71,28 +71,11 @@ function buildFacts(exec: Execution): Fact[] {
   if (exec.processId) {
     facts.push({ label: 'Process session', value: exec.processId });
   }
-  if (exec.cellId) {
-    facts.push({ label: 'Cell', value: exec.cellId });
-  }
-  facts.push({
-    label: exec.evidence.observed?.kind === 'item' ? 'Item id' : 'Call id',
-    value: <CopyablePath displayText={exec.id} copyText={exec.id} className="font-mono" />,
-  });
   const generation = generationLabel(exec);
   facts.push({
     label: 'Recorded as',
     value: generation ? `${exec.source} (${generation})` : exec.source,
   });
-  facts.push({
-    label: 'Rollout lines',
-    value:
-      exec.outputLineNumber !== undefined && exec.outputLineNumber !== exec.lineNumber
-        ? `${exec.lineNumber} → ${exec.outputLineNumber}`
-        : String(exec.lineNumber),
-  });
-  if (exec.turnId) {
-    facts.push({ label: 'Turn', value: exec.turnId });
-  }
   if (exec.fileWrites && exec.fileWrites.length > 0) {
     facts.push({
       label: 'Files written',
@@ -134,16 +117,6 @@ function buildFacts(exec: Execution): Fact[] {
       ),
     });
   }
-  facts.push({
-    label: 'Evidence',
-    value: (
-      <ul className="space-y-0.5">
-        {describeEvidence(exec).map((line) => (
-          <li key={line}>{line}</li>
-        ))}
-      </ul>
-    ),
-  });
   return facts;
 }
 
@@ -186,6 +159,8 @@ export const CodexExecutionDetails = ({
           </div>
         ))}
       </dl>
+
+      <CodexProvenance execution={exec} />
 
       {exec.kind === 'code_cell' && exec.input && (
         <CodeBlockViewer

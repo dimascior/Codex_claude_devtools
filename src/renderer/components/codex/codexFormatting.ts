@@ -26,7 +26,6 @@ import {
 
 import type {
   CommandAction,
-  CorrelationMethod,
   DurationSource,
   Execution,
   ExecutionKind,
@@ -288,17 +287,6 @@ export interface EvidenceBadge {
   title: string;
 }
 
-const CORRELATION_TEXT: Record<CorrelationMethod, string> = {
-  explicit_id: 'shared identifier',
-  turn_window: 'same turn, only running cell (record order)',
-  content: 'identical content',
-  unresolved: 'not linked',
-};
-
-function sameRecord(a: RecordEvidence, b: RecordEvidence): boolean {
-  return a.lineNumber === b.lineNumber && a.recordType === b.recordType;
-}
-
 function describeRecord(record: RecordEvidence): string {
   return `${record.recordType}, rollout line ${record.lineNumber}`;
 }
@@ -341,38 +329,6 @@ export function evidenceBadge(exec: Execution): EvidenceBadge | undefined {
     };
   }
   return undefined;
-}
-
-/**
- * Lines describing what is known about an execution and how it was linked.
- */
-export function describeEvidence(exec: Execution): string[] {
-  const { code, observed, result, cellLink, callSiteLink } = exec.evidence;
-  const lines: string[] = [];
-  if (code) {
-    lines.push(
-      `Script call site at line ${code.line} of the cell${code.dynamic ? ' (arguments only known at runtime)' : ''}`
-    );
-  }
-  if (observed) {
-    lines.push(`Observed: ${describeRecord(observed)}`);
-  }
-  if (result && !(observed && sameRecord(result, observed))) {
-    lines.push(`Result: ${describeRecord(result)}`);
-  } else if (!result) {
-    lines.push('Result: none recorded');
-  }
-  if (cellLink) {
-    const detail = cellLink.detail ? ` (${cellLink.detail})` : '';
-    // A top-level record has no cell: its link is to a call, or says why none was found.
-    const label = exec.parentId ? 'Cell link' : 'Attribution';
-    lines.push(`${label}: ${CORRELATION_TEXT[cellLink.method]}${detail}`);
-  }
-  if (callSiteLink) {
-    const detail = callSiteLink.detail ? ` (${callSiteLink.detail})` : '';
-    lines.push(`Call site link: ${CORRELATION_TEXT[callSiteLink.method]}${detail}`);
-  }
-  return lines;
 }
 
 const DURATION_SOURCE_TEXT: Record<DurationSource, string> = {

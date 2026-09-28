@@ -5,7 +5,6 @@ import {
   commandActionCounts,
   commandActionLabel,
   commandActionTarget,
-  describeEvidence,
   describeFileWrite,
   durationSourceLabel,
   evidenceBadge,
@@ -113,20 +112,12 @@ describe('codexFormatting', () => {
     };
     const scriptOnly = exec({ status: 'unknown', evidence: { code: { line: 3, dynamic: true } } });
     expect(evidenceBadge(scriptOnly)?.label).toBe('script only');
-    expect(describeEvidence(scriptOnly)).toEqual([
-      'Script call site at line 3 of the cell (arguments only known at runtime)',
-      'Result: none recorded',
-    ]);
 
     const recorded = exec({
       parentId: 'call_cell',
       evidence: { observed: item, result: item, cellLink: { method: 'turn_window' } },
     });
     expect(evidenceBadge(recorded)?.label).toBe('recorded');
-    expect(describeEvidence(recorded)).toEqual([
-      'Observed: item_completed/FileChange, rollout line 100',
-      'Cell link: same turn, only running cell (record order)',
-    ]);
 
     // A top-level item linked to the call recorded after it has no cell.
     const adopted = exec({
@@ -138,11 +129,6 @@ describe('codexFormatting', () => {
       },
     });
     expect(evidenceBadge(adopted)).toBeUndefined();
-    expect(describeEvidence(adopted)).toEqual([
-      'Observed: web_search_call, rollout line 101',
-      'Result: item_completed/WebSearch, rollout line 100',
-      'Attribution: shared identifier (linked by web_search_call.id)',
-    ]);
 
     const linked = exec({
       evidence: {
@@ -215,9 +201,7 @@ describe('file writes and Codex command tags', () => {
     expect(commandActionLabel({ type: 'write' })).toBe('write');
     expect(commandActionTarget({ type: 'read', name: 'a.ts', path: '/w/src/a.ts' })).toBe('a.ts');
     expect(commandActionTarget({ type: 'read', path: '/w/src/a.ts' })).toBe('/w/src/a.ts');
-    expect(commandActionTarget({ type: 'search', query: 'foo', path: 'src' })).toBe(
-      '"foo" in src'
-    );
+    expect(commandActionTarget({ type: 'search', query: 'foo', path: 'src' })).toBe('"foo" in src');
     expect(commandActionTarget({ type: 'search', path: 'src' })).toBe('src');
     expect(commandActionTarget({ type: 'list_files', path: 'docs' })).toBe('docs');
     expect(commandActionTarget({ type: 'unknown', command: 'make' })).toBeUndefined();

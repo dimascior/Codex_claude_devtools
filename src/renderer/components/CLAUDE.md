@@ -45,7 +45,9 @@ components/
 │   ├── CodexSessionHeader   # Session badges, execution stats, tokens, timeline filter
 │   ├── CodexTimeline        # Chronological entries, auto-scroll while following live
 │   ├── CodexExecutionCard   # One execution (command, code cell, file write, tool)
-│   ├── CodexExecutionDetails # Facts grid (incl. files written, Codex tags), argv, script, patch, args, output
+│   ├── CodexExecutionDetails # Facts grid (incl. files written, Codex tags), provenance, argv, script, patch, args, output
+│   ├── CodexProvenance      # Domain id, provider records (type, provider id, line), script call site, correlation methods
+│   ├── codexProvenance.ts   # Provenance groups and evidence class, built from Execution.evidence only
 │   ├── CodexNestedExecutions # Code-cell children as a tree
 │   ├── CodexCommandActions  # Codex's recorded read / list / search tags (parsed_cmd)
 │   ├── CodexStatusBadge / CodexOutputBlock / CodexPatchView
