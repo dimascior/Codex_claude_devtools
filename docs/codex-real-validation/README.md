@@ -47,6 +47,10 @@ Counts derived from it are a snapshot and may differ slightly between files in t
     Aggregate observations across the real corpus, produced by
     `scripts/codex-rollout-survey.ts --all`. Contains rollout file names and
     tool names but no content; model names are replaced by per-report aliases.
+    It predates the survey's "Runtime state and relationships" section
+    (settings records, their changes and relations, token usage records, turn
+    lifecycle fields, subagent joins); that section needs a new run over the
+    raw corpus.
 
 `current-code-mode-shapes.txt`
     Record/payload-type and item_completed item-type histograms from the

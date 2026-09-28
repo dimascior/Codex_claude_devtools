@@ -15,6 +15,10 @@
  * contain tool names (including MCP tools), model provider ids and rollout
  * file names: review it before sharing.
  *
+ * Its last section, "Runtime state and relationships"
+ * (scripts/codex-rollout-state.ts), covers settings records, their changes and
+ * relations, token usage records, turn lifecycle fields and subagent joins.
+ *
  * Usage (from the repository root):
  *   pnpm exec tsx scripts/codex-rollout-survey.ts [--max-files N | --all] [--sessions DIR] [--out FILE]
  *   pnpm exec tsx scripts/codex-rollout-survey.ts --from-transcripts DIR [--out FILE]
@@ -34,6 +38,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { performance } from 'perf_hooks';
 import * as readline from 'readline';
+import { fileURLToPath } from 'url';
 import * as zlib from 'zlib';
 
 import { parseCodeCell } from '../src/main/providers/codex/codeCell';
@@ -46,6 +51,8 @@ import {
 } from '../src/main/providers/codex/CodexRolloutParser';
 import { CodexScanner, type RolloutFile } from '../src/main/providers/codex/CodexScanner';
 import { outputBodyToText, parseToolOutput } from '../src/main/providers/codex/execOutput';
+
+import { RolloutStateSurvey } from './codex-rollout-state';
 
 import type { AgentSessionList, Execution, TimelineEntry } from '../src/main/domain';
 import type { CodexRolloutRecord } from '../src/main/providers/codex/types';
@@ -266,6 +273,7 @@ interface Timing {
 class Survey {
   private readonly sections = new Map<string, Tallies>();
   readonly timings: Timing[] = [];
+  readonly state = new RolloutStateSurvey();
   peakHeapBytes = 0;
 
   t(section: string): Tallies {
@@ -837,6 +845,7 @@ async function surveyNormalized(
     readMs: readDone - started,
     normalizeMs: done - readDone,
   });
+  survey.state.addSession(file.sessionId, records);
 
   const whole: Where = { file: file.sessionId, line: 0 };
   const flags = survey.t('sessions');
@@ -1116,22 +1125,35 @@ function factsTable(rows: [string, string][]): string[] {
   return ['| | |', '|---|---|', ...rows.map(([key, value]) => `| ${key} | ${cell(value)} |`), ''];
 }
 
+interface ModelAliases {
+  /** A model name → `<model-N>` */
+  name: (model: string) => string;
+  /** A row label `model <name>` → `model <model-N>` */
+  label: (key: string) => string;
+}
+
 /**
- * Row labels `model <name>` → `model <model-N>`, numbered in the order the rows
- * appear (most frequent first). Unreleased or custom model names never reach
- * the report.
+ * `<model-N>` aliases for the whole report, numbered in the order models are
+ * first shown (the turn_context table first, most frequent first). Unreleased
+ * or custom model names never reach the report.
  */
-function modelAliases(): (key: string) => string {
+function modelAliases(): ModelAliases {
   const aliases = new Map<string, string>();
-  return (key) => {
-    const name = /^model (.+)$/.exec(key)?.[1];
-    if (name === undefined || name.startsWith('(') || /^<model-\d+>$/.test(name)) return key;
-    let alias = aliases.get(name);
+  const name = (model: string): string => {
+    if (model.startsWith('(') || /^<model-\d+>$/.test(model)) return model;
+    let alias = aliases.get(model);
     if (alias === undefined) {
       alias = `<model-${aliases.size + 1}>`;
-      aliases.set(name, alias);
+      aliases.set(model, alias);
     }
-    return `model ${alias}`;
+    return alias;
+  };
+  return {
+    name,
+    label: (key) => {
+      const model = /^model (.+)$/.exec(key)?.[1];
+      return model === undefined ? key : `model ${name(model)}`;
+    },
   };
 }
 
@@ -1183,6 +1205,7 @@ function renderReport(input: ReportInput): string {
   const { list, files, selected, survey } = input;
   const out: string[] = [];
   const t = (section: string): Tallies => survey.t(section);
+  const models = modelAliases();
 
   out.push('# Codex rollout survey', '');
   out.push(
@@ -1319,7 +1342,7 @@ function renderReport(input: ReportInput): string {
   out.push(
     ...tallyTable(t('sessionMeta'), 'session_meta (instructions and tool lists are not read)')
   );
-  out.push(...tallyTable(t('turnContext'), 'turn_context', { label: modelAliases() }));
+  out.push(...tallyTable(t('turnContext'), 'turn_context', { label: models.label }));
   out.push(...tallyTable(t('compacted'), 'compacted (history fields are not read)'));
 
   out.push('## Response items', '');
@@ -1361,6 +1384,8 @@ function renderReport(input: ReportInput): string {
   out.push(...tallyTable(t('turnItemKeys'), 'item_completed item fields'));
   out.push(...tallyTable(t('commandResults'), 'Command result events'));
 
+  out.push(...survey.state.render({ modelAlias: models.name }));
+
   return out.join('\n');
 }
 
@@ -1368,16 +1393,18 @@ function renderReport(input: ReportInput): string {
 // Main
 // =============================================================================
 
-interface Options {
+export interface SurveyOptions {
   maxFiles: number;
   all: boolean;
   sessionsDir?: string;
   transcriptsDir?: string;
   outPath?: string;
+  /** No progress output (tests) */
+  quiet?: boolean;
 }
 
-function parseArgs(argv: string[]): Options {
-  const options: Options = { maxFiles: DEFAULT_MAX_FILES, all: false };
+function parseArgs(argv: string[]): SurveyOptions {
+  const options: SurveyOptions = { maxFiles: DEFAULT_MAX_FILES, all: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const value = (): string => {
@@ -1476,50 +1503,74 @@ function describeSessionsDir(sessionsDir: string, explicit: boolean): string {
   return 'custom location (CODEX_HOME)';
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
+/**
+ * Survey the rollouts and return the report, or undefined when there is no
+ * sessions directory.
+ */
+export async function runSurvey(options: SurveyOptions): Promise<string | undefined> {
   const sessionsDir = options.transcriptsDir
     ? sessionsFromTranscripts(options.transcriptsDir)
     : (options.sessionsDir ?? getCodexSessionsPath());
-  const survey = new Survey();
-  const scanner = new CodexScanner(sessionsDir);
+  try {
+    const survey = new Survey();
+    const scanner = new CodexScanner(sessionsDir);
 
-  const scanStarted = performance.now();
-  const list = await scanner.scan();
-  const scanMs = performance.now() - scanStarted;
-  if (!list.rootExists) {
+    const scanStarted = performance.now();
+    const list = await scanner.scan();
+    const scanMs = performance.now() - scanStarted;
+    if (!list.rootExists) {
+      return undefined;
+    }
+    surveyList(list, survey);
+
+    const files = (await scanner.listFiles()).sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const selected = options.all ? files : files.slice(0, options.maxFiles);
+    for (const [index, file] of selected.entries()) {
+      if (!options.quiet)
+        process.stderr.write(`\rSurveying rollout ${index + 1}/${selected.length}`);
+      await surveyFile(file, scanner.isLive(file.mtimeMs), survey);
+    }
+    if (!options.quiet) process.stderr.write('\n');
+
+    return renderReport({
+      sessionsDirOrigin: options.transcriptsDir
+        ? 'rebuilt from sanitized transcripts (--from-transcripts); strings are placeholders'
+        : describeSessionsDir(sessionsDir, options.sessionsDir !== undefined),
+      list,
+      scanMs,
+      files,
+      selected,
+      survey,
+    });
+  } finally {
+    // Rollouts rebuilt from transcripts live in a temporary directory of our own.
+    if (options.transcriptsDir) {
+      fs.rmSync(path.dirname(sessionsDir), { recursive: true, force: true });
+    }
+  }
+}
+
+async function main(): Promise<void> {
+  const options = parseArgs(process.argv.slice(2));
+  const report = await runSurvey(options);
+  if (report === undefined) {
     console.error(
-      `No Codex sessions directory at ${sessionsDir}. Set CODEX_HOME or pass --sessions <dir>.`
+      `No Codex sessions directory at ${options.sessionsDir ?? getCodexSessionsPath()}. Set CODEX_HOME or pass --sessions <dir>.`
     );
     process.exitCode = 1;
     return;
   }
-  surveyList(list, survey);
-
-  const files = (await scanner.listFiles()).sort((a, b) => b.mtimeMs - a.mtimeMs);
-  const selected = options.all ? files : files.slice(0, options.maxFiles);
-  for (const [index, file] of selected.entries()) {
-    process.stderr.write(`\rSurveying rollout ${index + 1}/${selected.length}`);
-    await surveyFile(file, scanner.isLive(file.mtimeMs), survey);
-  }
-  process.stderr.write('\n');
-
-  const report = renderReport({
-    sessionsDirOrigin: options.transcriptsDir
-      ? 'rebuilt from sanitized transcripts (--from-transcripts); strings are placeholders'
-      : describeSessionsDir(sessionsDir, options.sessionsDir !== undefined),
-    list,
-    scanMs,
-    files,
-    selected,
-    survey,
-  });
   const outPath = options.outPath ?? path.join(os.tmpdir(), 'codex-survey.md');
   fs.writeFileSync(outPath, report, 'utf8');
   console.log(`Report written to ${outPath}`);
 }
 
-main().catch((error: unknown) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+const invokedDirectly =
+  process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (invokedDirectly) {
+  main().catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
