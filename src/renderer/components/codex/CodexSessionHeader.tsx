@@ -1,6 +1,7 @@
 /**
- * CodexSessionHeader - What this session is, where it ran, and how its
- * executions went; plus the timeline filter.
+ * CodexSessionHeader - What this session is, where it ran, the runtime
+ * settings of its latest turn, and how its executions went; plus the timeline
+ * filter.
  */
 
 import { CopyablePath } from '@renderer/components/common/CopyablePath';
@@ -17,6 +18,8 @@ import { formatTokensCompact } from '@renderer/utils/formatters';
 import { FolderOpen } from 'lucide-react';
 
 import { commandActionCounts, formatRelativeTime } from './codexFormatting';
+import { currentRuntime } from './codexRuntimeFormatting';
+import { CodexRuntimeSummary } from './CodexRuntimeSummary';
 
 import type { CodexTimelineFilter } from './codexFormatting';
 import type { AgentSessionDetail } from '@shared/types';
@@ -57,6 +60,9 @@ export const CodexSessionHeader = ({
   const { session, stats, tokenUsage } = detail;
   const problems = stats.failed + stats.declined + stats.interrupted;
   const tagged = commandActionCounts(stats.commandActions);
+  const runtime = currentRuntime(detail.runtime);
+  // The runtime line shows the latest turn's model; the tag is for sessions without one.
+  const showModelTag = !runtime?.primary.some((row) => row.field === 'model');
 
   return (
     <div className="shrink-0 border-b px-4 py-3" style={{ borderColor: COLOR_BORDER }}>
@@ -111,7 +117,7 @@ export const CodexSessionHeader = ({
             </div>
           )}
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            {session.model && <Tag title="Model">{session.model}</Tag>}
+            {session.model && showModelTag && <Tag title="Model">{session.model}</Tag>}
             {session.source && <Tag title="Session source">{session.source}</Tag>}
             {session.cliVersion && <Tag title="Codex version">v{session.cliVersion}</Tag>}
             {session.gitBranch && (
@@ -125,6 +131,7 @@ export const CodexSessionHeader = ({
               updated {formatRelativeTime(session.updatedAt)}
             </span>
           </div>
+          {runtime && <CodexRuntimeSummary current={runtime} />}
         </div>
       </div>
 

@@ -4,6 +4,7 @@
 
 import type { AgentProvider, ExecutionStats } from './Execution';
 import type { TimelineEntry } from './Message';
+import type { SessionRuntimeState } from './RuntimeState';
 
 /**
  * Where a session title came from.
@@ -119,6 +120,8 @@ export interface AgentSessionDetail {
   timeline: TimelineEntry[];
   stats: ExecutionStats;
   tokenUsage?: AgentTokenUsage;
+  /** Effective settings per turn and recorded thread settings */
+  runtime?: SessionRuntimeState;
   /** Non-fatal problems encountered while reading the file */
   warnings: string[];
   /** Opaque file-state fingerprint for no-op refresh short-circuiting */

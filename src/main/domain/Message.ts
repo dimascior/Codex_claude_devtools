@@ -6,6 +6,7 @@
  */
 
 import type { Execution } from './Execution';
+import type { RuntimeSettingsChange, SettingsChangeSource } from './RuntimeState';
 
 interface TimelineEntryBase {
   /** Stable id, unique within the session */
@@ -94,6 +95,28 @@ export interface InheritedContextEntry extends TimelineEntryBase {
   lastLineNumber: number;
 }
 
+/**
+ * Runtime settings that changed. `lineNumber` is the source record: the thread
+ * settings record for a recorded transition, the later turn's turn context for
+ * an observed one. Only settings whose value changed are listed.
+ *
+ * - `thread_settings_applied` (recorded by the provider): takes effect from the
+ *   first turn when recorded before any turn state (`first_turn`), otherwise
+ *   from the next turn state (`next_turn`); the turn already running keeps its
+ *   settings. `turnId` is set when the record came inside a turn.
+ * - `turn_context_diff` (derived by the viewer): the effective settings of turn
+ *   `turnId` differ from the previous turn's (`this_turn`). No provider event
+ *   records the change.
+ */
+export interface SettingsChangeEntry extends TimelineEntryBase {
+  kind: 'settings_change';
+  source: SettingsChangeSource;
+  appliesTo: 'first_turn' | 'next_turn' | 'this_turn';
+  changes: RuntimeSettingsChange[];
+  /** `turn_context_diff` only: line of the previous turn's turn context it was compared with */
+  previousLineNumber?: number;
+}
+
 export type TimelineEntry =
   | UserMessageEntry
   | AgentMessageEntry
@@ -101,4 +124,5 @@ export type TimelineEntry =
   | ExecutionEntry
   | TurnEventEntry
   | CompactionEntry
-  | InheritedContextEntry;
+  | InheritedContextEntry
+  | SettingsChangeEntry;

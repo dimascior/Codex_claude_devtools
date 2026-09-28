@@ -959,6 +959,9 @@ function surveyEntry(entry: TimelineEntry, where: Where, survey: Survey): void {
       t.add('inherited context (subagent)', where);
       survey.t('sessions').add('subagent with inherited parent history', where);
       break;
+    case 'settings_change':
+      t.add(`settings change · ${entry.source} · ${entry.appliesTo}`, where);
+      break;
     case 'execution':
       break;
   }

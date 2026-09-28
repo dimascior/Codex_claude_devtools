@@ -152,12 +152,14 @@ export class CodexSessionService extends EventEmitter {
     if (entry.malformedLines > 0) {
       warnings.push(`${entry.malformedLines} malformed line(s) were skipped`);
     }
+    warnings.push(...normalized.warnings);
 
     const detail: AgentSessionDetail = {
       session: summary,
       timeline: normalized.timeline,
       stats: normalized.stats,
       tokenUsage: normalized.tokenUsage,
+      runtime: normalized.runtime,
       warnings,
       fingerprint,
     };

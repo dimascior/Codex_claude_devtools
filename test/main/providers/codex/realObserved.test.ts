@@ -524,15 +524,31 @@ describe('real-observed fixtures: item_completed schema coverage', () => {
 });
 
 describe('real-observed fixtures: thread settings and custom tool pairs', () => {
-  it('recognizes thread_settings_applied without rendering it', () => {
+  it('parses thread_settings_applied; identical records render nothing', () => {
     const records = loadRecords('thread-settings-applied.jsonl');
     for (const record of records) {
       expect(parseCodexEvent(record.payload)).toEqual({
-        kind: 'ignored',
-        type: 'thread_settings_applied',
+        kind: 'thread_settings',
+        threadId: '01a0cefe-b6c1-7b21-aa52-cdb658c6d54b',
+        settings: record.payload.thread_settings,
       });
     }
-    expect(normalizeCodexRollout(records, { active: false }).timeline).toEqual([]);
+    const session = normalizeCodexRollout(records, { active: false });
+    // Five identical records: the first is the baseline, the others are repeats.
+    expect(session.timeline).toEqual([]);
+    expect(session.runtime.turns).toEqual([]);
+    expect(session.runtime.thread).toMatchObject({
+      lineNumber: 2550,
+      settings: {
+        model: '<model-1>',
+        reasoningEffort: 'xhigh',
+        reasoningSummary: 'detailed',
+        approvalPolicy: 'never',
+        permissionProfile: 'disabled',
+        activePermissionProfile: ':danger-full-access',
+        collaborationMode: 'default',
+      },
+    });
   });
 
   it('pairs exec calls with their outputs by call id', () => {

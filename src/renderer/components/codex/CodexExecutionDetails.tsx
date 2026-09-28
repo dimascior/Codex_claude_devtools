@@ -1,7 +1,8 @@
 /**
  * CodexExecutionDetails - Expanded body of an execution: exact command,
  * execution facts (cwd, exit code, timing, files written, Codex's own command
- * classification), provenance (ids, records, links), input, output.
+ * classification), provenance (ids, records, links), the effective runtime of
+ * its turn, input, output.
  */
 
 import { CodeBlockViewer } from '@renderer/components/chat/viewers/CodeBlockViewer';
@@ -19,6 +20,7 @@ import {
 import { CodexOutputBlock } from './CodexOutputBlock';
 import { CodexPatchView } from './CodexPatchView';
 import { CodexProvenance } from './CodexProvenance';
+import { CodexRuntimeDetails } from './CodexRuntimeDetails';
 
 import type { Execution } from '@shared/types';
 
@@ -161,6 +163,7 @@ export const CodexExecutionDetails = ({
       </dl>
 
       <CodexProvenance execution={exec} />
+      <CodexRuntimeDetails execution={exec} />
 
       {exec.kind === 'code_cell' && exec.input && (
         <CodeBlockViewer

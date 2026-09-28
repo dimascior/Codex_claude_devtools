@@ -1,6 +1,7 @@
 /**
  * CodexTimeline - Chronological view of a Codex session: requests, agent
- * messages, reasoning, executions and turn events, in rollout order.
+ * messages, reasoning, executions, turn events and settings changes, in rollout
+ * order. Provides each turn's effective runtime state to execution details.
  */
 
 import { useMemo } from 'react';
@@ -14,6 +15,9 @@ import { CodexExecutionCard } from './CodexExecutionCard';
 import { type CodexTimelineFilter, filterTimeline, formatClockTime } from './codexFormatting';
 import { CodexMessageItem } from './CodexMessageItem';
 import { CodexReasoningItem } from './CodexReasoningItem';
+import { TurnRuntimeContext } from './codexRuntimeContext';
+import { turnStatesById } from './codexRuntimeFormatting';
+import { CodexSettingsChangeItem } from './CodexSettingsChangeItem';
 
 import type { AgentSessionDetail, TimelineEntry } from '@shared/types';
 
@@ -37,6 +41,8 @@ function renderEntry(entry: TimelineEntry): React.JSX.Element {
     case 'compaction':
     case 'inherited_context':
       return <CodexEventItem entry={entry} />;
+    case 'settings_change':
+      return <CodexSettingsChangeItem entry={entry} />;
   }
 }
 
@@ -46,6 +52,7 @@ export const CodexTimeline = ({
   followLive,
 }: CodexTimelineProps): React.JSX.Element => {
   const entries = useMemo(() => filterTimeline(detail.timeline, filter), [detail.timeline, filter]);
+  const turnStates = useMemo(() => turnStatesById(detail.runtime), [detail.runtime]);
   const { scrollContainerRef } = useAutoScrollBottom([entries.length, detail.fingerprint], {
     threshold: 150,
     enabled: followLive,
@@ -54,54 +61,56 @@ export const CodexTimeline = ({
   });
 
   return (
-    <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-5xl space-y-2 p-4">
-        {detail.warnings.map((warning) => (
-          <div
-            key={warning}
-            className="flex items-center gap-2 rounded-md px-3 py-1.5 text-xs"
-            style={{
-              backgroundColor: 'var(--warning-bg)',
-              border: '1px solid var(--warning-border)',
-              color: 'var(--warning-text)',
-            }}
-          >
-            <TriangleAlert className="size-3.5 shrink-0" />
-            {warning}
-          </div>
-        ))}
-
-        {entries.length === 0 && (
-          <div className="py-12 text-center text-sm" style={{ color: COLOR_TEXT_MUTED }}>
-            {filter === 'all'
-              ? 'Nothing recorded in this rollout yet.'
-              : filter === 'executions'
-                ? 'No tool calls or commands recorded yet.'
-                : 'No failed, declined or interrupted executions.'}
-          </div>
-        )}
-
-        {entries.map((entry) => (
-          <div
-            key={entry.id}
-            className="flex gap-3"
-            style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 48px' }}
-          >
+    <TurnRuntimeContext.Provider value={turnStates}>
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-5xl space-y-2 p-4">
+          {detail.warnings.map((warning) => (
             <div
-              className="w-16 shrink-0 pt-2 text-right font-mono text-[11px] tabular-nums"
-              style={{ color: COLOR_TEXT_MUTED }}
-              title={
-                entry.timestamp
-                  ? `${entry.timestamp} · line ${entry.lineNumber}`
-                  : `line ${entry.lineNumber}`
-              }
+              key={warning}
+              className="flex items-center gap-2 rounded-md px-3 py-1.5 text-xs"
+              style={{
+                backgroundColor: 'var(--warning-bg)',
+                border: '1px solid var(--warning-border)',
+                color: 'var(--warning-text)',
+              }}
             >
-              {formatClockTime(entry.timestamp)}
+              <TriangleAlert className="size-3.5 shrink-0" />
+              {warning}
             </div>
-            <div className="min-w-0 flex-1">{renderEntry(entry)}</div>
-          </div>
-        ))}
+          ))}
+
+          {entries.length === 0 && (
+            <div className="py-12 text-center text-sm" style={{ color: COLOR_TEXT_MUTED }}>
+              {filter === 'all'
+                ? 'Nothing recorded in this rollout yet.'
+                : filter === 'executions'
+                  ? 'No tool calls or commands recorded yet.'
+                  : 'No failed, declined or interrupted executions.'}
+            </div>
+          )}
+
+          {entries.map((entry) => (
+            <div
+              key={entry.id}
+              className="flex gap-3"
+              style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 48px' }}
+            >
+              <div
+                className="w-16 shrink-0 pt-2 text-right font-mono text-[11px] tabular-nums"
+                style={{ color: COLOR_TEXT_MUTED }}
+                title={
+                  entry.timestamp
+                    ? `${entry.timestamp} · line ${entry.lineNumber}`
+                    : `line ${entry.lineNumber}`
+                }
+              >
+                {formatClockTime(entry.timestamp)}
+              </div>
+              <div className="min-w-0 flex-1">{renderEntry(entry)}</div>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </TurnRuntimeContext.Provider>
   );
 };

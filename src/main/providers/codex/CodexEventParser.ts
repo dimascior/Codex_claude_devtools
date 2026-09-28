@@ -103,6 +103,8 @@ export type CodexEvent =
   | { kind: 'turn_complete'; turnId?: string; error?: string; durationMs?: number }
   | { kind: 'turn_aborted'; turnId?: string; reason?: string; durationMs?: number }
   | { kind: 'context_compacted' }
+  /** `thread_settings_applied`: the thread settings as recorded (raw; see CodexRuntimeState) */
+  | { kind: 'thread_settings'; threadId?: string; settings: Record<string, unknown> }
   | { kind: 'recorded_item'; item: CodexRecordedItem; envelope: CodexItemEnvelope }
   | { kind: 'ignored'; type: string };
 
@@ -147,6 +149,14 @@ export function parseCodexEvent(payload: Record<string, unknown>): CodexEvent {
       };
     case 'context_compacted':
       return { kind: 'context_compacted' };
+    case 'thread_settings_applied':
+      return isRecord(payload.thread_settings)
+        ? {
+            kind: 'thread_settings',
+            threadId: str(payload.thread_id),
+            settings: payload.thread_settings,
+          }
+        : { kind: 'ignored', type };
     case 'exec_command_end': {
       const item = parseCommandItem(payload, str(payload.call_id));
       return item ? recorded(item, type, payload) : { kind: 'ignored', type };

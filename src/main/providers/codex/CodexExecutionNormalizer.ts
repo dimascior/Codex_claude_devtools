@@ -23,6 +23,10 @@
  * `inherited_context` entry instead of being rendered as the subagent's own
  * activity. A subagent's own history has no user message; its title is its
  * task name (see `SubagentTaskNameFinder`).
+ *
+ * Runtime settings (the effective settings of each turn, recorded thread
+ * settings and the changes between them) come from `turn_context` and
+ * `thread_settings_applied`; see `CodexRuntimeStateBuilder`.
  */
 
 import { hasRecordedResult, isStaticOnly } from '@shared/utils/executionEvidence';
@@ -37,6 +41,7 @@ import {
   SubagentTaskNameFinder,
   toPreview,
 } from './CodexMetadataParser';
+import { CodexRuntimeStateBuilder } from './CodexRuntimeState';
 
 import type { CodexRolloutRecord } from './types';
 import type {
@@ -47,6 +52,7 @@ import type {
   ExecutionStats,
   InheritedContextEntry,
   ReasoningEntry,
+  SessionRuntimeState,
   SessionTitleSource,
   TimelineEntry,
   UserMessageEntry,
@@ -59,6 +65,7 @@ export interface NormalizeOptions {
 
 export interface NormalizedCodexSession {
   metadata: CodexSessionMetadata;
+  /** Model of the latest effective turn state */
   model?: string;
   /** First user request as a preview, else a subagent's task name */
   title?: string;
@@ -69,6 +76,10 @@ export interface NormalizedCodexSession {
   executions: Execution[];
   stats: ExecutionStats;
   tokenUsage?: AgentTokenUsage;
+  /** Effective settings per turn and recorded thread settings */
+  runtime: SessionRuntimeState;
+  /** Non-fatal inconsistencies in the records (safe structural descriptions) */
+  warnings: string[];
   /** Whether the last recorded turn started but has not finished */
   turnInProgress: boolean;
 }
@@ -115,6 +126,7 @@ export function normalizeCodexRollout(
   let inherited: InheritedContextEntry | undefined;
   const inheritedTracker = new InheritedHistoryTracker();
   const taskNameFinder = new SubagentTaskNameFinder();
+  const runtime = new CodexRuntimeStateBuilder();
 
   const entries: TimelineEntry[] = [];
   const eventUserMessages: UserMessageEntry[] = [];
@@ -181,6 +193,7 @@ export function normalizeCodexRollout(
         turnCwd = str(record.payload.cwd) ?? turnCwd;
         model = str(record.payload.model) ?? model;
         turnId = str(record.payload.turn_id) ?? turnId;
+        runtime.turnContext(record, base.timestamp);
         break;
       }
 
@@ -339,10 +352,12 @@ export function normalizeCodexRollout(
             turnInProgress = true;
             currentTurnStartLine = record.lineNumber;
             turnId = event.turnId ?? turnId;
+            runtime.turnStarted(event.turnId);
             break;
           case 'turn_complete':
             sawTurnEvents = true;
             turnInProgress = false;
+            runtime.turnEnded();
             parser.closeTurn(event.turnId ?? turnId);
             if (event.error) {
               entries.push({
@@ -359,6 +374,7 @@ export function normalizeCodexRollout(
           case 'turn_aborted':
             sawTurnEvents = true;
             turnInProgress = false;
+            runtime.turnEnded();
             parser.interruptTurn(event.turnId ?? turnId);
             entries.push({
               kind: 'turn_event',
@@ -380,6 +396,9 @@ export function normalizeCodexRollout(
             break;
           case 'recorded_item':
             pushExecution(parser.handleRecordedItem(event.item, event.envelope, record, context()));
+            break;
+          case 'thread_settings':
+            runtime.threadSettings(record, base.timestamp, event, metadata.threadId);
             break;
           case 'ignored':
             break;
@@ -403,6 +422,7 @@ export function normalizeCodexRollout(
   const userMessages = eventUserMessages.length > 0 ? eventUserMessages : itemUserMessages;
   const agentMessages = itemAgentMessages.length > 0 ? itemAgentMessages : eventAgentMessages;
   const reasoning = itemReasoning.length > 0 ? itemReasoning : eventReasoning;
+  const settings = runtime.finish();
 
   const timeline: TimelineEntry[] = [
     ...(inherited ? [inherited] : []),
@@ -412,6 +432,7 @@ export function normalizeCodexRollout(
     ...interAgentMessages,
     ...reasoning,
     ...mergeCompactions(compactions),
+    ...settings.entries,
   ];
   // File order is chronological; the sort is stable for entries from one line.
   timeline.sort((a, b) => a.lineNumber - b.lineNumber);
@@ -426,9 +447,14 @@ export function normalizeCodexRollout(
     titleSource = 'agent_task';
   }
 
+  // The current model is the latest effective turn state's, not a later
+  // re-emitted turn context's.
+  const latestModel = [...settings.runtime.turns].reverse().find((turn) => turn.settings.model)
+    ?.settings.model;
+
   return {
     metadata,
-    model,
+    model: latestModel ?? model,
     title: firstRequest ? toPreview(firstRequest.text) : taskName,
     titleSource,
     inheritedRecordCount:
@@ -437,6 +463,8 @@ export function normalizeCodexRollout(
     executions,
     stats: computeExecutionStats(executions),
     tokenUsage,
+    runtime: settings.runtime,
+    warnings: settings.warnings,
     turnInProgress: options.active && turnInProgress,
   };
 }
