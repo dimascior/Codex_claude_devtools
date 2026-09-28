@@ -457,7 +457,10 @@ function computeExecutionStats(executions: readonly Execution[]): ExecutionStats
     declined: 0,
     interrupted: 0,
     byKind: {},
+    filesWritten: 0,
+    commandActions: {},
   };
+  const written = new Set<string>();
   const visit = (exec: Execution, nested: boolean): void => {
     stats.byKind[exec.kind] = (stats.byKind[exec.kind] ?? 0) + 1;
     // A script call site is not a command that ran; count commands with a provider record.
@@ -478,6 +481,14 @@ function computeExecutionStats(executions: readonly Execution[]): ExecutionStats
     if (exec.status === 'running') stats.running++;
     if (exec.status === 'declined') stats.declined++;
     if (exec.status === 'interrupted') stats.interrupted++;
+    if (exec.kind === 'patch' && exec.status === 'completed') {
+      for (const write of exec.fileWrites ?? []) written.add(write.movedTo ?? write.path);
+    }
+    for (const action of exec.commandActions ?? []) {
+      if (action.type !== 'unknown') {
+        stats.commandActions[action.type] = (stats.commandActions[action.type] ?? 0) + 1;
+      }
+    }
     for (const child of exec.children ?? []) {
       visit(child, true);
     }
@@ -485,6 +496,7 @@ function computeExecutionStats(executions: readonly Execution[]): ExecutionStats
   for (const exec of executions) {
     visit(exec, false);
   }
+  stats.filesWritten = written.size;
   return stats;
 }
 

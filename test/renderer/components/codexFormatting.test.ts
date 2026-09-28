@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  classifiedActions,
+  commandActionCounts,
+  commandActionLabel,
+  commandActionTarget,
   describeEvidence,
+  describeFileWrite,
   durationSourceLabel,
   evidenceBadge,
+  executionLabel,
   executionSummary,
+  fileWritesSummary,
   filterTimeline,
   formatRelativeTime,
   shortCallId,
@@ -172,5 +179,66 @@ describe('codexFormatting', () => {
     expect(durationSourceLabel('reported')).toBe('reported by Codex');
     expect(durationSourceLabel('provider_timestamps')).toBe('from Codex start and end times');
     expect(durationSourceLabel('record_timestamps')).toBe('between rollout records');
+  });
+});
+
+describe('file writes and Codex command tags', () => {
+  const patch = (fileWrites: Execution['fileWrites']): Execution =>
+    exec({ kind: 'patch', name: 'apply_patch', command: 'apply_patch', fileWrites });
+
+  it('labels patches as file writes and summarizes the files', () => {
+    const written = patch([
+      { path: 'src/new.ts', change: 'add' },
+      { path: 'src/a.ts', change: 'update' },
+    ]);
+    expect(executionLabel(written)).toBe('file write');
+    expect(executionSummary(written)).toBe('src/new.ts (added), src/a.ts');
+    // Nothing known about the files: the recorded tool name stays.
+    expect(executionSummary(patch([]))).toBe('apply_patch');
+  });
+
+  it('describes each change and shortens long lists', () => {
+    expect(describeFileWrite({ path: 'a.ts', change: 'delete' })).toBe('a.ts (deleted)');
+    expect(describeFileWrite({ path: 'a.ts', change: 'update', movedTo: 'b.ts' })).toBe(
+      'a.ts → b.ts'
+    );
+    expect(describeFileWrite({ path: 'a.ts' })).toBe('a.ts');
+    expect(
+      fileWritesSummary([{ path: 'a' }, { path: 'b' }, { path: 'c' }, { path: 'd', change: 'add' }])
+    ).toBe('4 files: a, b, c, …');
+    expect(fileWritesSummary([])).toBeUndefined();
+  });
+
+  it('labels Codex command actions with what they are about', () => {
+    expect(commandActionLabel({ type: 'list_files' })).toBe('list');
+    expect(commandActionLabel({ type: 'unknown' })).toBe('unclassified');
+    expect(commandActionLabel({ type: 'write' })).toBe('write');
+    expect(commandActionTarget({ type: 'read', name: 'a.ts', path: '/w/src/a.ts' })).toBe('a.ts');
+    expect(commandActionTarget({ type: 'read', path: '/w/src/a.ts' })).toBe('/w/src/a.ts');
+    expect(commandActionTarget({ type: 'search', query: 'foo', path: 'src' })).toBe(
+      '"foo" in src'
+    );
+    expect(commandActionTarget({ type: 'search', path: 'src' })).toBe('src');
+    expect(commandActionTarget({ type: 'list_files', path: 'docs' })).toBe('docs');
+    expect(commandActionTarget({ type: 'unknown', command: 'make' })).toBeUndefined();
+  });
+
+  it('tags only the actions Codex could classify', () => {
+    const command = exec({
+      commandActions: [
+        { type: 'read', name: 'a.ts' },
+        { type: 'unknown', command: 'make' },
+      ],
+    });
+    expect(classifiedActions(command)).toEqual([{ type: 'read', name: 'a.ts' }]);
+    expect(classifiedActions(exec({}))).toEqual([]);
+  });
+
+  it('summarizes the session counts', () => {
+    expect(commandActionCounts({ read: 3, search: 1, list_files: 2 })).toBe(
+      '3 reads · 1 search · 2 listings'
+    );
+    expect(commandActionCounts({ read: 1, write: 2 })).toBe('1 read · 2 write');
+    expect(commandActionCounts({})).toBeUndefined();
   });
 });

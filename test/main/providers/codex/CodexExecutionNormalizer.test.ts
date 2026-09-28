@@ -145,7 +145,7 @@ describe('normalizeCodexRollout — function-call and local_shell generations', 
     expect(byId(list, 'call_patch_5')).toMatchObject({
       kind: 'patch',
       source: 'custom_tool_call',
-      patchFiles: ['src/lib.rs'],
+      fileWrites: [{ path: 'src/lib.rs', change: 'update' }],
       exitCode: 0,
       status: 'completed',
     });
@@ -228,7 +228,7 @@ describe('normalizeCodexRollout — code mode', () => {
       expect(child.evidence.result).toBeUndefined();
       expect(child.status).toBe('unknown');
     }
-    expect(cell.children?.[1].patchFiles).toEqual(['notes.md']);
+    expect(cell.children?.[1].fileWrites).toEqual([{ path: 'notes.md', change: 'add' }]);
 
     expect(byId(list, 'call_wait_3')).toMatchObject({
       kind: 'code_wait',

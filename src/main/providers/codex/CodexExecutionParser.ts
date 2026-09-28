@@ -43,6 +43,7 @@ import type {
   Execution,
   ExecutionKind,
   ExecutionStatus,
+  FileWrite,
   RecordEvidence,
 } from '@main/domain';
 
@@ -77,7 +78,7 @@ interface Classified {
   cwd?: string;
   processId?: string;
   cellId?: string;
-  patchFiles?: string[];
+  fileWrites?: FileWrite[];
 }
 
 interface BaseInit {
@@ -410,7 +411,7 @@ export class CodexExecutionParser {
     exec.input = JSON.stringify(action);
     if (isPatch) {
       exec.command = 'apply_patch';
-      exec.patchFiles = extractPatchFiles(argv[1] ?? '');
+      exec.fileWrites = extractPatchWrites(argv[1] ?? '');
     } else {
       const display = describeArgv(argv);
       exec.command = display.command;
@@ -470,7 +471,7 @@ export class CodexExecutionParser {
     if (isPatch) {
       exec.command = 'apply_patch';
       exec.cwd = context.cwd;
-      exec.patchFiles = extractPatchFiles(input);
+      exec.fileWrites = extractPatchWrites(input);
     }
     return exec;
   }
@@ -679,6 +680,7 @@ export class CodexExecutionParser {
         exec.processId = item.processId;
         exec.exitCode = item.exitCode;
         exec.status = commandItemStatus(item.status, item.exitCode);
+        exec.commandActions = item.actions;
         this.setItemOutput(exec, item.output);
         break;
       }
@@ -687,7 +689,7 @@ export class CodexExecutionParser {
         exec.name = 'apply_patch';
         exec.command = 'apply_patch';
         exec.cwd = context.cwd;
-        exec.patchFiles = item.files;
+        exec.fileWrites = item.writes;
         exec.status = mapPatchStatus(item.status);
         this.setItemOutput(exec, joinText(item.stdout, item.stderr));
         break;
@@ -745,6 +747,7 @@ export class CodexExecutionParser {
         }
         draft.cwd ??= item.cwd;
         draft.processId ??= item.processId;
+        draft.commandActions ??= item.actions;
         if (draft.output === undefined && item.output) {
           this.setItemOutput(draft, item.output);
           this.provisionalOutputs.add(draft);
@@ -756,8 +759,8 @@ export class CodexExecutionParser {
         if (status !== 'completed' || draft.status === 'running' || draft.status === 'unknown') {
           draft.status = status;
         }
-        if (!draft.patchFiles || draft.patchFiles.length === 0) {
-          draft.patchFiles = item.files;
+        if (!draft.fileWrites || draft.fileWrites.length === 0) {
+          draft.fileWrites = item.writes;
         }
         if (draft.output === undefined) {
           const text = joinText(item.stdout, item.stderr);
@@ -1231,7 +1234,7 @@ function classifyTool(
             command: 'apply_patch',
             argv,
             cwd,
-            patchFiles: extractPatchFiles(argv[1] ?? ''),
+            fileWrites: extractPatchWrites(argv[1] ?? ''),
           };
         }
         const display = describeArgv(argv);
@@ -1272,7 +1275,7 @@ function classifyTool(
       };
     case 'apply_patch': {
       const patch = str(a.input) ?? str(a.patch) ?? '';
-      return { kind: 'patch', command: 'apply_patch', cwd, patchFiles: extractPatchFiles(patch) };
+      return { kind: 'patch', command: 'apply_patch', cwd, fileWrites: extractPatchWrites(patch) };
     }
     case 'update_plan':
       return { kind: 'plan' };
@@ -1305,7 +1308,7 @@ function applyClassification(
   draft.cwd = classified.cwd ?? draft.cwd;
   draft.processId = classified.processId;
   draft.cellId = classified.cellId;
-  draft.patchFiles = classified.patchFiles;
+  draft.fileWrites = classified.fileWrites;
   if (
     classified.kind === 'command' ||
     classified.kind === 'command_input' ||
@@ -1386,6 +1389,7 @@ function mergeRecordedInto(draft: Execution, recorded: Execution): void {
   draft.argv ??= recorded.argv;
   draft.shell ??= recorded.shell;
   draft.generation ??= recorded.generation;
+  draft.commandActions ??= recorded.commandActions;
   draft.evidence = {
     ...draft.evidence,
     observed: recorded.evidence.observed,
@@ -1517,19 +1521,36 @@ function describeStdin(chars: unknown): string {
 }
 
 /**
- * Paths touched by an apply_patch envelope.
+ * Files an apply_patch envelope writes, from its `*** Add File:`,
+ * `*** Update File:`, `*** Delete File:` and `*** Move to:` headers.
  */
-export function extractPatchFiles(patch: string): string[] {
-  const files: string[] = [];
-  const re = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/gm;
+export function extractPatchWrites(patch: string): FileWrite[] {
+  const writes: FileWrite[] = [];
+  const re = /^\*\*\* (Add File|Update File|Delete File|Move to): (.+)$/gm;
+  let current: FileWrite | undefined;
   let match: RegExpExecArray | null;
   while ((match = re.exec(patch)) !== null) {
-    const file = match[1].trim();
-    if (file && !files.includes(file)) {
-      files.push(file);
+    const path = match[2].trim();
+    if (!path) {
+      continue;
+    }
+    if (match[1] === 'Move to') {
+      // A move belongs to the update header right before it.
+      if (current?.change === 'update' && current.movedTo === undefined) {
+        current.movedTo = path;
+      }
+      continue;
+    }
+    current = writes.find((write) => write.path === path);
+    if (!current) {
+      current = {
+        path,
+        change: match[1] === 'Add File' ? 'add' : match[1] === 'Delete File' ? 'delete' : 'update',
+      };
+      writes.push(current);
     }
   }
-  return files;
+  return writes;
 }
 
 /**

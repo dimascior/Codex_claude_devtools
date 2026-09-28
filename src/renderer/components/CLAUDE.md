@@ -44,9 +44,10 @@ components/
 │   ├── CodexSessionList     # Rollouts grouped by project, live dot, follow-live toggle
 │   ├── CodexSessionHeader   # Session badges, execution stats, tokens, timeline filter
 │   ├── CodexTimeline        # Chronological entries, auto-scroll while following live
-│   ├── CodexExecutionCard   # One execution (command, code cell, patch, tool)
-│   ├── CodexExecutionDetails # Facts grid, argv, script, patch, args, output
+│   ├── CodexExecutionCard   # One execution (command, code cell, file write, tool)
+│   ├── CodexExecutionDetails # Facts grid (incl. files written, Codex tags), argv, script, patch, args, output
 │   ├── CodexNestedExecutions # Code-cell children as a tree
+│   ├── CodexCommandActions  # Codex's recorded read / list / search tags (parsed_cmd)
 │   ├── CodexStatusBadge / CodexOutputBlock / CodexPatchView
 │   ├── CodexMessageItem / CodexReasoningItem / CodexEventItem
 │   └── codexFormatting.ts   # Status labels, icons, summaries, filterTimeline

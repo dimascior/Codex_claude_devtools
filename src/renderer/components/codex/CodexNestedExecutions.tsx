@@ -17,8 +17,15 @@ import {
 } from '@renderer/constants/cssVariables';
 import { formatDuration } from '@renderer/utils/formatters';
 
+import { CodexCommandActions } from './CodexCommandActions';
 import { CodexExecutionDetails } from './CodexExecutionDetails';
-import { evidenceBadge, executionLabel, executionSummary, KIND_ICONS } from './codexFormatting';
+import {
+  classifiedActions,
+  evidenceBadge,
+  executionLabel,
+  executionSummary,
+  KIND_ICONS,
+} from './codexFormatting';
 import { CodexStatusBadge } from './CodexStatusBadge';
 
 import type { Execution } from '@shared/types';
@@ -110,6 +117,7 @@ export const CodexNestedExecutions = ({ cell }: CodexNestedExecutionsProps): Rea
                 <span className="min-w-0 flex-1 truncate" style={{ color: COLOR_TEXT }}>
                   {executionSummary(child)}
                 </span>
+                <CodexCommandActions actions={classifiedActions(child)} />
                 {cwd && (
                   <span
                     className="max-w-40 shrink-0 truncate text-[11px]"

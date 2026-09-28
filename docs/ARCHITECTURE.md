@@ -77,6 +77,15 @@ while exactly one code cell of that turn was running; no identifier links them),
 `unknown` rather than being reported as successful. Durations record whether
 they were reported by the provider or computed from timestamps.
 
+Read, list and search tags on commands are Codex's own classification
+(`parsed_cmd`), shown only where Codex saved it: it is persisted on few command
+records, so most commands carry no tag, and the viewer never derives one from
+the command text. Entries Codex classified as `unknown` stay in the details
+without a tag. Patches are shown as file writes: each file with its change
+(added, updated, deleted, moved), from the patch's own headers or from the
+`changes` Codex recorded; the session's file count covers completed patches
+only.
+
 Examples from real rollouts: a command blocked by a PreToolUse hook is
 `declined` (it never ran, no exit code applies); a user abort is `interrupted`;
 a hosted web search item is linked to its call only when both carry the same

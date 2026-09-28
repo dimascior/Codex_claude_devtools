@@ -253,6 +253,22 @@ describe('real-observed fixtures: code-mode correlation windows', () => {
       expect(orphan.status).toBe('unknown');
     }
   });
+
+  it("keeps Codex's classification on nested and unattributed commands", () => {
+    // Nested under its cell, or top-level when no single cell was running.
+    expect(childIds('call_XVTNeYnfQiqE7096yB40xIkM')).toContain(
+      'exec-581175f1-6654-4eef-8807-4f020205afd0'
+    );
+    const nestedRead = list
+      .flatMap((exec) => exec.children ?? [])
+      .find((exec) => exec.id === 'exec-581175f1-6654-4eef-8807-4f020205afd0');
+    expect(nestedRead?.commandActions).toEqual([{ type: 'read' }]);
+    expect(findExecution(list, 'exec-2d4ed089-bcd1-4e41-b960-86b56a7551b3').commandActions).toEqual(
+      [{ type: 'unknown' }]
+    );
+    // `unknown` is kept on the execution but not counted as a classification.
+    expect(session.stats.commandActions).toEqual({ read: 1 });
+  });
 });
 
 describe('real-observed fixtures: forked subagent rollout', () => {
@@ -491,6 +507,19 @@ describe('real-observed fixtures: item_completed schema coverage', () => {
       'No call record with this id in the rollout'
     );
     expect(session.stats.unattributed).toBe(10);
+  });
+
+  it("keeps Codex's own classification of recorded commands, and adds none", () => {
+    // The sanitizer keeps only the type of each parsed_cmd entry.
+    const session = normalizeCodexRollout(records, { active: false });
+    const list = executionsOf(session.timeline);
+    expect(
+      list.flatMap((exec) => (exec.commandActions ? [[exec.id, exec.commandActions]] : []))
+    ).toEqual([
+      ['exec-581175f1-6654-4eef-8807-4f020205afd0', [{ type: 'read' }]],
+      ['exec-fb90f6fa-85d7-4a29-940d-8936ad7e9a5e', [{ type: 'read' }]],
+    ]);
+    expect(session.stats.commandActions).toEqual({ read: 2 });
   });
 });
 

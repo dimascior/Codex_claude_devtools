@@ -2,7 +2,8 @@
  * CodexExecutionCard - One execution in the Codex timeline.
  *
  * Header: what ran and how it ended (label, exact command, status, duration).
- * Context line: where it ran and how Codex encoded it.
+ * Context line: what Codex recorded the command as doing, where it ran and
+ * how Codex encoded it.
  * Code cells always show their nested-call tree; details expand on click.
  */
 
@@ -22,8 +23,10 @@ import {
 import { formatDuration } from '@renderer/utils/formatters';
 import { ChevronRight } from 'lucide-react';
 
+import { CodexCommandActions } from './CodexCommandActions';
 import { CodexExecutionDetails } from './CodexExecutionDetails';
 import {
+  classifiedActions,
   evidenceBadge,
   executionLabel,
   executionSummary,
@@ -67,9 +70,6 @@ function contextParts(exec: Execution): string[] {
   if (badge) {
     parts.push(badge.label);
   }
-  if (exec.patchFiles && exec.patchFiles.length > 0) {
-    parts.push(exec.patchFiles.join(', '));
-  }
   return parts;
 }
 
@@ -80,6 +80,7 @@ export const CodexExecutionCard = ({
   const Icon = KIND_ICONS[exec.kind];
   const summary = executionSummary(exec);
   const context = contextParts(exec);
+  const actions = classifiedActions(exec);
   const isCell = exec.kind === 'code_cell';
   const appearance = statusAppearance(exec.status);
 
@@ -134,13 +135,17 @@ export const CodexExecutionCard = ({
             {shortCallId(exec.id)}
           </span>
         </div>
-        {context.length > 0 && (
+        {(context.length > 0 || actions.length > 0) && (
           <div
-            className="ml-[52px] mt-0.5 truncate text-[11px]"
+            className="ml-[52px] mt-0.5 flex min-w-0 items-center gap-2 text-[11px]"
             style={{ color: COLOR_TEXT_MUTED }}
-            title={context.join(' · ')}
           >
-            {context.join(' · ')}
+            <CodexCommandActions actions={actions} />
+            {context.length > 0 && (
+              <span className="min-w-0 truncate" title={context.join(' · ')}>
+                {context.join(' · ')}
+              </span>
+            )}
           </div>
         )}
       </button>

@@ -25,11 +25,13 @@ import {
 } from 'lucide-react';
 
 import type {
+  CommandAction,
   CorrelationMethod,
   DurationSource,
   Execution,
   ExecutionKind,
   ExecutionStatus,
+  FileWrite,
   RecordEvidence,
   TimelineEntry,
 } from '@shared/types';
@@ -135,6 +137,8 @@ export function executionLabel(exec: Execution): string {
       return 'stdin';
     case 'command':
       return exec.source === 'user_shell' ? 'user shell' : exec.name;
+    case 'patch':
+      return 'file write';
     default:
       return exec.namespace ? `${exec.namespace}.${exec.name}` : exec.name;
   }
@@ -155,6 +159,9 @@ export function generationLabel(exec: Execution): string | undefined {
  * One-line summary for executions without a command.
  */
 export function executionSummary(exec: Execution): string | undefined {
+  if (exec.kind === 'patch') {
+    return fileWritesSummary(exec.fileWrites ?? []) ?? exec.command;
+  }
   if (exec.command) {
     return exec.command;
   }
@@ -184,6 +191,92 @@ export function executionSummary(exec: Execution): string | undefined {
 function firstLine(text: string | undefined): string | undefined {
   const line = text?.trim().split('\n')[0];
   return line ? line : undefined;
+}
+
+// =============================================================================
+// File writes and recorded command actions
+// =============================================================================
+
+/** "src/a.ts (added)", "src/b.ts → src/c.ts", "src/d.ts (deleted)", "src/e.ts". */
+export function describeFileWrite(write: FileWrite): string {
+  if (write.movedTo) {
+    return `${write.path} → ${write.movedTo}`;
+  }
+  switch (write.change) {
+    case 'add':
+      return `${write.path} (added)`;
+    case 'delete':
+      return `${write.path} (deleted)`;
+    default:
+      return write.path;
+  }
+}
+
+/** "src/a.ts (added), src/b.ts" or "4 files: src/a.ts (added), src/b.ts, …". */
+export function fileWritesSummary(writes: readonly FileWrite[]): string | undefined {
+  if (writes.length === 0) {
+    return undefined;
+  }
+  const shown = writes.slice(0, 3).map(describeFileWrite).join(', ');
+  return writes.length > 3 ? `${writes.length} files: ${shown}, …` : shown;
+}
+
+/** Codex's own action types (`parsed_cmd`); types it adds later are shown as recorded. */
+export function commandActionLabel(action: CommandAction): string {
+  switch (action.type) {
+    case 'read':
+      return 'read';
+    case 'list_files':
+      return 'list';
+    case 'search':
+      return 'search';
+    case 'unknown':
+      return 'unclassified';
+    default:
+      return action.type;
+  }
+}
+
+/** What an action is about: the file read, the directory listed, the query searched. */
+export function commandActionTarget(action: CommandAction): string | undefined {
+  switch (action.type) {
+    case 'read':
+      return action.name ?? action.path;
+    case 'list_files':
+      return action.path;
+    case 'search':
+      if (action.query && action.path) {
+        return `"${action.query}" in ${action.path}`;
+      }
+      return action.query ? `"${action.query}"` : action.path;
+    default:
+      return undefined;
+  }
+}
+
+/** Actions Codex could classify (`unknown` ones are left to the details panel). */
+export function classifiedActions(exec: Execution): CommandAction[] {
+  return (exec.commandActions ?? []).filter((action) => action.type !== 'unknown');
+}
+
+/** "3 reads · 1 search · 2 listings" from session stats. */
+export function commandActionCounts(counts: Partial<Record<string, number>>): string | undefined {
+  const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+  const parts = Object.entries(counts)
+    .filter((entry): entry is [string, number] => (entry[1] ?? 0) > 0)
+    .map(([type, n]) => {
+      switch (type) {
+        case 'read':
+          return plural(n, 'read', 'reads');
+        case 'search':
+          return plural(n, 'search', 'searches');
+        case 'list_files':
+          return plural(n, 'listing', 'listings');
+        default:
+          return `${n} ${type}`;
+      }
+    });
+  return parts.length > 0 ? parts.join(' · ') : undefined;
 }
 
 // =============================================================================

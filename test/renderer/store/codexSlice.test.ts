@@ -60,6 +60,8 @@ function detail(id: string, fingerprint: string): AgentSessionDetail {
       declined: 0,
       interrupted: 0,
       byKind: {},
+      filesWritten: 0,
+      commandActions: {},
     },
     warnings: [],
     fingerprint,

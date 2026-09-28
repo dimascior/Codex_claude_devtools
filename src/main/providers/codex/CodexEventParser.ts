@@ -18,7 +18,12 @@
 import { durationToMs } from './execOutput';
 
 import type { CodexTokenUsageRaw } from './types';
-import type { AgentTokenUsage, AgentTokenUsageTotals } from '@main/domain';
+import type {
+  AgentTokenUsage,
+  AgentTokenUsageTotals,
+  CommandAction,
+  FileWrite,
+} from '@main/domain';
 
 /**
  * An execution recorded by the harness. `id` is the item id: the call id for
@@ -39,12 +44,14 @@ export type CodexRecordedItem =
       status?: string;
       output?: string;
       interactionInput?: string;
+      /** Codex's own classification of the command (`parsed_cmd`) */
+      actions?: CommandAction[];
     }
   | {
       type: 'file_change';
       id: string;
       status?: string;
-      files: string[];
+      writes: FileWrite[];
       stdout?: string;
       stderr?: string;
     }
@@ -155,7 +162,7 @@ export function parseCodexEvent(payload: Record<string, unknown>): CodexEvent {
           type: 'file_change',
           id,
           status: success === undefined ? undefined : success ? 'completed' : 'failed',
-          files: isRecord(payload.changes) ? Object.keys(payload.changes) : [],
+          writes: parseFileWrites(payload.changes),
           stdout: str(payload.stdout),
           stderr: str(payload.stderr),
         },
@@ -268,7 +275,7 @@ function parseCompletedItem(payload: Record<string, unknown>): CodexEvent {
           type: 'file_change',
           id,
           status: str(record.status),
-          files: isRecord(record.changes) ? Object.keys(record.changes) : [],
+          writes: parseFileWrites(record.changes),
           stdout: str(record.stdout),
           stderr: str(record.stderr),
         },
@@ -363,7 +370,51 @@ function parseCommandItem(
     status: str(record.status),
     output,
     interactionInput: str(record.interaction_input),
+    actions: parseCommandActions(record.parsed_cmd),
   };
+}
+
+/**
+ * Codex `parsed_cmd`: `read {cmd, name, path}`, `list_files {cmd, path}`,
+ * `search {cmd, query, path}`, `unknown {cmd}`.
+ */
+function parseCommandActions(value: unknown): CommandAction[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const actions = value.filter(isRecord).flatMap((entry): CommandAction[] => {
+    const type = str(entry.type);
+    if (!type) {
+      return [];
+    }
+    return [
+      {
+        type,
+        command: str(entry.cmd),
+        name: str(entry.name),
+        path: str(entry.path),
+        query: str(entry.query),
+      },
+    ];
+  });
+  return actions.length > 0 ? actions : undefined;
+}
+
+/**
+ * `changes` maps each path to `{type: 'add' | 'delete' | 'update', move_path?}`.
+ */
+function parseFileWrites(changes: unknown): FileWrite[] {
+  if (!isRecord(changes)) {
+    return [];
+  }
+  return Object.entries(changes).map(([path, change]): FileWrite => {
+    const type = isRecord(change) ? change.type : undefined;
+    return {
+      path,
+      change: type === 'add' || type === 'delete' || type === 'update' ? type : undefined,
+      movedTo: isRecord(change) ? str(change.move_path) : undefined,
+    };
+  });
 }
 
 function joinStreams(record: Record<string, unknown>): string | undefined {

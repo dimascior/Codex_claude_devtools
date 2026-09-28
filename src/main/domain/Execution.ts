@@ -137,6 +137,35 @@ export interface ExecutionEvidence {
  */
 export type DurationSource = 'reported' | 'provider_timestamps' | 'record_timestamps';
 
+/**
+ * What a shell command does, as the provider classified it when it ran (Codex
+ * `parsed_cmd`). Recorded, never derived from the command text by this app, so
+ * most commands have none.
+ */
+export interface CommandAction {
+  /** `read`, `list_files`, `search` or `unknown` (Codex's own types; others kept verbatim) */
+  type: string;
+  /** The command, or the part of a pipeline, the action was parsed from */
+  command?: string;
+  /** File name, for reads */
+  name?: string;
+  /** Path read, listed or searched */
+  path?: string;
+  /** Search query */
+  query?: string;
+}
+
+/**
+ * A file a patch execution writes. The change comes from the provider's record
+ * of the applied patch, or from the patch's own file headers.
+ */
+export interface FileWrite {
+  path: string;
+  change?: 'add' | 'update' | 'delete';
+  /** New path when an update also moved the file */
+  movedTo?: string;
+}
+
 export interface Execution {
   /** Provider call id (e.g. `call_…`), or `${parentId}:${index}` for nested calls */
   id: string;
@@ -201,8 +230,10 @@ export interface Execution {
   children?: Execution[];
   /** Whether the provider certified its recorded call inventory as complete */
   childrenComplete?: boolean;
-  /** Paths touched by a patch execution */
-  patchFiles?: string[];
+  /** Files a patch execution writes */
+  fileWrites?: FileWrite[];
+  /** The provider's own classification of a command, when it recorded one */
+  commandActions?: CommandAction[];
   /** What is actually known about this execution, and from which records */
   evidence: ExecutionEvidence;
 }
@@ -228,4 +259,8 @@ export interface ExecutionStats {
   declined: number;
   interrupted: number;
   byKind: Partial<Record<ExecutionKind, number>>;
+  /** Distinct files written by completed patch executions */
+  filesWritten: number;
+  /** Provider-recorded command actions by type (`unknown` excluded) */
+  commandActions: Partial<Record<string, number>>;
 }

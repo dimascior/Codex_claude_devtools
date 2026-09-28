@@ -16,7 +16,7 @@ import {
 import { formatTokensCompact } from '@renderer/utils/formatters';
 import { FolderOpen } from 'lucide-react';
 
-import { formatRelativeTime } from './codexFormatting';
+import { commandActionCounts, formatRelativeTime } from './codexFormatting';
 
 import type { CodexTimelineFilter } from './codexFormatting';
 import type { AgentSessionDetail } from '@shared/types';
@@ -56,6 +56,7 @@ export const CodexSessionHeader = ({
 }: CodexSessionHeaderProps): React.JSX.Element => {
   const { session, stats, tokenUsage } = detail;
   const problems = stats.failed + stats.declined + stats.interrupted;
+  const tagged = commandActionCounts(stats.commandActions);
 
   return (
     <div className="shrink-0 border-b px-4 py-3" style={{ borderColor: COLOR_BORDER }}>
@@ -141,6 +142,17 @@ export const CodexSessionHeader = ({
             <span style={{ color: COLOR_TEXT_MUTED }}> ({stats.nested} nested)</span>
           )}
         </span>
+        {stats.filesWritten > 0 && (
+          <span title="Distinct files added, updated, moved or deleted by completed patches (apply_patch calls and Codex file-change records)">
+            <span style={{ color: COLOR_TEXT }}>{stats.filesWritten}</span>{' '}
+            {stats.filesWritten === 1 ? 'file' : 'files'} written
+          </span>
+        )}
+        {tagged && (
+          <span title="Reads, searches and listings Codex itself recorded for commands (parsed_cmd); one command can carry several. Codex records this for few commands, so most reads are not counted here.">
+            Codex-tagged: {tagged}
+          </span>
+        )}
         {stats.scriptOnly > 0 && (
           <span
             style={{ color: COLOR_TEXT_MUTED }}

@@ -9,7 +9,7 @@ import {
   toSessionId,
 } from '../../../../src/main/providers/codex/codexPaths';
 import {
-  extractPatchFiles,
+  extractPatchWrites,
   resolveWorkdir,
 } from '../../../../src/main/providers/codex/CodexExecutionParser';
 import {
@@ -167,12 +167,25 @@ describe('path and patch helpers', () => {
     expect(projectKeyForCwd('/home/a/')).toBe('/home/a');
   });
 
-  it('lists files touched by a patch', () => {
+  it('lists the files a patch writes, with the change each header names', () => {
     expect(
-      extractPatchFiles(
+      extractPatchWrites(
         '*** Begin Patch\n*** Add File: a.md\n+x\n*** Update File: src/b.rs\n*** Move to: src/c.rs\n*** Delete File: d.txt\n*** End Patch'
       )
-    ).toEqual(['a.md', 'src/b.rs', 'src/c.rs', 'd.txt']);
+    ).toEqual([
+      { path: 'a.md', change: 'add' },
+      { path: 'src/b.rs', change: 'update', movedTo: 'src/c.rs' },
+      { path: 'd.txt', change: 'delete' },
+    ]);
+    // A move follows its own update header, even when that file is listed twice.
+    expect(
+      extractPatchWrites(
+        '*** Update File: a.ts\n*** Update File: b.ts\n*** Update File: a.ts\n*** Move to: c.ts'
+      )
+    ).toEqual([
+      { path: 'a.ts', change: 'update', movedTo: 'c.ts' },
+      { path: 'b.ts', change: 'update' },
+    ]);
   });
 
   it('detects injected context blocks', () => {

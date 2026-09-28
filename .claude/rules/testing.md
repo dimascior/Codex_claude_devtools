@@ -32,7 +32,8 @@ test/
 │   ├── providers/
 │   │   └── codex/       # Rollout parsing, normalization, output/command parsing, session service,
 │   │                    # realObserved (real fixtures), evidenceLinking (linking rules),
-│   │                    # CodexMetadataParser (UUIDv7 ids, inherited history, subagent task names)
+│   │                    # CodexMetadataParser (UUIDv7 ids, inherited history, subagent task names),
+│   │                    # recordedActions (parsed_cmd tags, file writes)
 │   ├── services/        # Service tests
 │   │   ├── analysis/    (ChunkBuilder)
 │   │   ├── discovery/   (ProjectPathResolver, SessionSearcher)

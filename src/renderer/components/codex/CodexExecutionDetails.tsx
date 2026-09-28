@@ -1,6 +1,7 @@
 /**
  * CodexExecutionDetails - Expanded body of an execution: exact command,
- * execution facts (cwd, exit code, timing, ids, rollout lines), input, output.
+ * execution facts (cwd, exit code, timing, ids, rollout lines, files written,
+ * Codex's own command classification), input, output.
  */
 
 import { CodeBlockViewer } from '@renderer/components/chat/viewers/CodeBlockViewer';
@@ -8,7 +9,14 @@ import { CopyablePath } from '@renderer/components/common/CopyablePath';
 import { COLOR_TEXT, COLOR_TEXT_MUTED } from '@renderer/constants/cssVariables';
 import { formatDuration } from '@renderer/utils/formatters';
 
-import { describeEvidence, durationSourceLabel, generationLabel } from './codexFormatting';
+import {
+  commandActionLabel,
+  commandActionTarget,
+  describeEvidence,
+  describeFileWrite,
+  durationSourceLabel,
+  generationLabel,
+} from './codexFormatting';
 import { CodexOutputBlock } from './CodexOutputBlock';
 import { CodexPatchView } from './CodexPatchView';
 
@@ -85,8 +93,46 @@ function buildFacts(exec: Execution): Fact[] {
   if (exec.turnId) {
     facts.push({ label: 'Turn', value: exec.turnId });
   }
-  if (exec.patchFiles && exec.patchFiles.length > 0) {
-    facts.push({ label: 'Files', value: exec.patchFiles.join(', ') });
+  if (exec.fileWrites && exec.fileWrites.length > 0) {
+    facts.push({
+      label: 'Files written',
+      value: (
+        <ul className="space-y-0.5 font-mono">
+          {exec.fileWrites.map((write) => (
+            <li key={write.path}>{describeFileWrite(write)}</li>
+          ))}
+        </ul>
+      ),
+    });
+  }
+  if (exec.commandActions && exec.commandActions.length > 0) {
+    facts.push({
+      label: 'Codex tags',
+      value: (
+        <ul className="space-y-0.5">
+          {exec.commandActions.map((action, index) => {
+            const target = commandActionTarget(action);
+            return (
+              <li key={`${index}:${action.type}`}>
+                <span className="font-semibold">{commandActionLabel(action)}</span>
+                {target && <span className="font-mono"> {target}</span>}
+                {action.type === 'read' && action.path && action.path !== target && (
+                  <span className="font-mono" style={{ color: COLOR_TEXT_MUTED }}>
+                    {' '}
+                    ({action.path})
+                  </span>
+                )}
+                {action.command && (
+                  <div className="font-mono" style={{ color: COLOR_TEXT_MUTED }}>
+                    {action.command}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      ),
+    });
   }
   facts.push({
     label: 'Evidence',
