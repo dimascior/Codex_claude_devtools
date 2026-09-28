@@ -6,7 +6,7 @@ Node.js runtime handling file system, IPC, and app lifecycle.
 - `index.ts` - App entry point, lifecycle management
 - `ipc/` - IPC handlers organized by domain
 - `services/` - Business logic by domain
-- `domain/` - Provider-neutral session model (`Execution`, `TimelineEntry`, `AgentSession*`), re-exported via `@shared/types`
+- `domain/` - Provider-neutral session model (`Execution`, `TimelineEntry`, `AgentSession*`, runtime state in `RuntimeState.ts`), re-exported via `@shared/types`
 - `providers/codex/` - Codex CLI rollout provider (scanner, parsers, normalizer, `CodexSessionService`)
 - `types/` - Type definitions
 - `utils/` - Utility functions
@@ -44,11 +44,12 @@ as `codex:session-change` (IPC) and SSE events (HTTP server).
 | `codexPaths.ts` | `$CODEX_HOME` resolution, session id ↔ path (ids are validated relative paths) |
 | `CodexRolloutParser.ts` | Streaming line reader (plain/zstd), envelope + legacy normalization, payload sanitization |
 | `CodexMetadataParser.ts` | `session_meta` parsing, project key/name from cwd, injected-context detection, subagent inherited-history tracking and task names |
-| `CodexEventParser.ts` | `event_msg` parsing incl. paginated `item_completed` TurnItems (`parsed_cmd` tags, file changes) |
+| `CodexEventParser.ts` | `event_msg` parsing incl. paginated `item_completed` TurnItems (`parsed_cmd` tags, file changes), `thread_settings_applied` |
 | `CodexExecutionParser.ts` | Call/output correlation into `Execution`s (unified exec polls, code cells, patches) |
 | `codeCell.ts` | Static analysis of code-mode scripts (`tools.x({...})` calls) |
 | `execOutput.ts` | Output header parsing (exit code, wall time, process/cell ids) |
 | `shellCommand.ts` | argv display (unwraps `bash -lc`, PowerShell `-Command`, `cmd /c`) |
-| `CodexExecutionNormalizer.ts` | `normalizeCodexRollout()` → timeline, executions, stats, token usage |
+| `CodexRuntimeState.ts` | Effective settings per turn (first `turn_context`), recorded thread settings, `settings_change` entries (recorded vs `turn_context_diff`), same-turn mismatch warnings |
+| `CodexExecutionNormalizer.ts` | `normalizeCodexRollout()` → timeline, executions, stats, token usage, runtime state |
 | `CodexScanner.ts` | Rollout discovery, head metadata cache, live selection, project grouping |
 | `CodexSessionService.ts` | Entry point for IPC/HTTP: cached, incremental session detail |

@@ -157,12 +157,26 @@ comes from the three newer rollouts alone.
     - `hosted-web-search-windows.jsonl`: hosted `web_search_call` records and
       the WebSearch items persisted one record before them, with (cli 0.142.5)
       and without (cli 0.137) matching ids.
+    - `thread-settings-changes.jsonl`: four windows of one rollout of the
+      2026-09-28 corpus (built from its v2 transcript): turns before any
+      `thread_settings_applied`, the first record (line 1000) and the next
+      `turn_context` changing approval, sandbox and permission profile
+      (observed, not recorded as a change), mid-turn records changing model and
+      effort (1010, 1011) that the running turn does not take, identical
+      repeats, a between-turn effort change (3205) carried by the next turn,
+      and an identical `turn_context` written again after a mid-turn
+      compaction (4100/4111). `session_meta` names 0.142.0-alpha.6; the
+      records from line 1000 on have newer record types and fields (a resume
+      by a newer producer is consistent with that).
 
 `parser-findings.md`
     Analysis of the Codex parser against this evidence: findings table,
     correlation classes, the three real anomaly classes, schema coverage,
     the changes made and a before/after survey on the committed fixtures.
     Regression tests: `test/main/providers/codex/realObserved.test.ts`.
+    Its treatment of `thread_settings_applied` (recognized, not rendered)
+    predates the runtime-state work; see "Runtime state" in
+    `docs/ARCHITECTURE.md` and `test/main/providers/codex/runtimeState.test.ts`.
 
 Tooling (not evidence):
     `scripts/codex-rollout-transcript.ts` is the sanitizer that produced the

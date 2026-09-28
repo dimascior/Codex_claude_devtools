@@ -112,6 +112,80 @@ open. Subagent sessions start with a copy of the parent's history, which is
 summarized by one "inherited context" entry; the subagent's title is its task
 name, because the task text itself is stored encrypted.
 
+## Runtime state
+
+The Codex view shows the settings each turn ran under (model, reasoning effort,
+approval policy, sandbox, permission profile, …) and when they changed
+(`CodexRuntimeStateBuilder`, domain types in `src/main/domain/RuntimeState.ts`).
+The rules below are what the frozen 61-rollout corpus shows
+([runtime-state-survey-2026-09-28.md](codex-real-validation/runtime-state-survey-2026-09-28.md),
+producers 0.42.0 and 0.137 to 0.157.1); they are observations about those
+versions, not guarantees about future ones.
+
+```
+first turn_context of each turn
+    = effective state of that turn (TurnRuntimeState, with its rollout line)
+
+thread_settings_applied
+    = recorded transition, effective from the next turn;
+      the turn already running keeps its settings
+
+turns no recorded transition covers
+    = changes observed by comparing consecutive turn states (turn_context_diff)
+```
+
+- **Effective turn state.** Every turn with executions had its first
+  `turn_context` before its first tool call. Codex writes the record again after
+  a mid-turn compaction; all 124 repeats in the corpus had identical settings
+  and are ignored. A later record for the same turn that differs keeps the first
+  as the turn's state and adds a warning naming only line numbers and keys.
+- **Recorded transitions.** Each `thread_settings_applied` for the rollout's own
+  thread is compared with the thread settings recorded before it, on known
+  fields only; unchanged fields are dropped and identical records (most of them)
+  add nothing. The first record is the baseline. A change applies from the next
+  turn (`next_turn`), or from the first turn when recorded before any
+  (`first_turn`). A record written mid-turn names the running turn, whose state
+  is not changed: in the corpus such a change never altered the running turn,
+  and every change not reverted before the next turn appeared in that turn's
+  `turn_context`.
+- **Observed changes.** Whether a change was recorded is decided from the file,
+  per turn boundary, never from the CLI version: two consecutive turn states are
+  compared unless thread settings were already recorded before the earlier one.
+  This covers sessions without `thread_settings_applied` (old producers, but
+  also individual 0.145 and 0.157.1 sessions) and the turns before the first
+  record in sessions that start recording mid-file (17 of the 37 sessions with
+  thread settings, e.g. a session resumed by a newer producer). Such entries are
+  `turn_context_diff`: the viewer observed a different effective state, which
+  does not prove Codex emitted a settings event. They are shown dashed as
+  "Runtime state changed · Derived from effective turn contexts", never as a
+  Codex event.
+- **Executions** carry no copy of the state: they are related to their turn's
+  state through `turnId`. The execution details show it as "Effective runtime"
+  (with its `turn_context` line), a section apart from Provenance: it describes
+  the turn, not evidence about the execution.
+- **Header.** The session header shows the latest effective turn state (Model,
+  Effort, Approval, Sandbox, Profile; the other settings behind "more"). The
+  session list still shows the model of the first turn context (see
+  [ROADMAP.md](ROADMAP.md)).
+
+Exceptions the corpus shows:
+
+- `turn_context.summary` (`turnSummary`) is not `reasoning_summary`
+  (`reasoningSummary`): before 0.155, turns record `auto` while the thread
+  setting reads `detailed` or `none`. Both are kept; neither is mapped onto the
+  other.
+- `service_tier` was recorded only in thread settings. It is shown as thread
+  state and in settings changes, never as a per-turn value.
+- `active_permission_profile` appears in `turn_context` only from about 0.153;
+  before that it is thread-level only and is not copied into turn states.
+- Working directories are compared ignoring letter case and separator style on
+  Windows paths (all 100 disagreements were letter case only) and are shown as
+  Codex wrote them.
+- Only the number of `workspace_roots` is kept; `runtime_workspace_roots` is a
+  different field and is not read.
+- A setting only one of two states records is not compared: coverage differs
+  between producer versions.
+
 ## Live follow
 
 - `CodexSessionWatcher` watches `$CODEX_HOME/sessions` recursively (100 ms
@@ -171,6 +245,13 @@ trust boundary; remote serving has no authentication and is out of scope (see
 - Subagent rollouts migrated from the legacy format declare an inherited-history
   boundary equal to their record count; the viewer ends the inherited prefix at
   the first record of the subagent's own history instead.
+- `session_meta.cli_version` names the producer that created a rollout, not
+  the one that wrote later records: resumed sessions can switch record types
+  and fields mid-file (e.g. start writing `thread_settings_applied`). Runtime
+  state therefore uses what each part of the file records, not the version.
+- Turn contexts and executions without a turn id (legacy rollouts) cannot be
+  told apart from re-emissions by id: a record naming no turn belongs to the
+  turn that is open, if any.
 - `.jsonl.zst` rollouts need a runtime with `zlib.createZstdDecompress`
   (Node 22.15+/23.8+).
 - Very large live sessions are re-normalized and re-sent in full on every

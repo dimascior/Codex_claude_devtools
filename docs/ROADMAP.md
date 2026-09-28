@@ -56,5 +56,8 @@ incremental-vs-full parse equivalence tests unchanged.
   the normalized session, matching what the Claude view offers.
 - **Provider layout**: move the Claude reader behind `src/main/providers/claude/`
   to mirror the Codex provider, without changing its behaviour.
-- **List/detail parity**: the Codex session list shows the first model of a
-  session, the detail view the last one.
+- **List/detail parity**: the Codex session list shows the model of a
+  session's first turn context (read from the head of the file), while the
+  detail header shows the latest effective turn state (the first `turn_context`
+  of the last turn). Making the list agree needs the tail of each rollout, not
+  only its head, so it is left for the large-session work above.

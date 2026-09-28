@@ -33,7 +33,8 @@ test/
 │   │   └── codex/       # Rollout parsing, normalization, output/command parsing, session service,
 │   │                    # realObserved (real fixtures), evidenceLinking (linking rules),
 │   │                    # CodexMetadataParser (UUIDv7 ids, inherited history, subagent task names),
-│   │                    # recordedActions (parsed_cmd tags, file writes)
+│   │                    # recordedActions (parsed_cmd tags, file writes),
+│   │                    # runtimeState (effective turn state, recorded/derived settings changes)
 │   ├── services/        # Service tests
 │   │   ├── analysis/    (ChunkBuilder)
 │   │   ├── discovery/   (ProjectPathResolver, SessionSearcher)
@@ -46,7 +47,7 @@ test/
 │       ├── regexValidation.test.ts
 │       └── tokenizer.test.ts
 ├── renderer/
-│   ├── components/      # Component helpers (codexFormatting, codexProvenance, renderOutput, markdownImages)
+│   ├── components/      # Component helpers (codexFormatting, codexProvenance, codexRuntime, renderOutput, markdownImages)
 │   ├── hooks/           # Hook tests
 │   │   ├── navigationUtils.test.ts
 │   │   ├── useAutoScrollBottom.test.ts
