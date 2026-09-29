@@ -237,12 +237,9 @@ export class CodexScanner {
    * Read (or reuse) the head of a rollout.
    */
   async readHead(file: RolloutFile): Promise<RolloutHead> {
-    const cached = this.headCache.get(file.filePath);
-    if (
-      cached &&
-      (cached.final || (cached.mtimeMs === file.mtimeMs && cached.size === file.size))
-    ) {
-      return cached.head;
+    const cached = this.peekHead(file);
+    if (cached) {
+      return cached;
     }
 
     let head: RolloutHead;
@@ -262,6 +259,21 @@ export class CodexScanner {
 
     this.headCache.set(file.filePath, { mtimeMs: file.mtimeMs, size: file.size, head, final });
     return head;
+  }
+
+  /**
+   * The cached head of a rollout, when one was read for its current state;
+   * never reads the file.
+   */
+  peekHead(file: RolloutFile): RolloutHead | undefined {
+    const cached = this.headCache.get(file.filePath);
+    if (
+      cached &&
+      (cached.final || (cached.mtimeMs === file.mtimeMs && cached.size === file.size))
+    ) {
+      return cached.head;
+    }
+    return undefined;
   }
 
   private pruneHeadCache(existing: Set<string>): void {

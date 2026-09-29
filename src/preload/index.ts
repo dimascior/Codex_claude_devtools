@@ -4,6 +4,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   APP_RELAUNCH,
   CODEX_GET_SESSION_DETAIL,
+  CODEX_GET_SESSION_RELATIONS,
   CODEX_LIST_SESSIONS,
   CODEX_SESSION_CHANGE,
   CONTEXT_CHANGED,
@@ -72,6 +73,7 @@ import type {
   AgentSessionChangeEvent,
   AgentSessionDetailResponse,
   AgentSessionList,
+  AgentSessionRelations,
   AppConfig,
   ClaudeRootFolderSelection,
   ClaudeRootInfo,
@@ -545,6 +547,11 @@ const electronAPI: ElectronAPI = {
         sessionId,
         knownFingerprint
       ) as Promise<AgentSessionDetailResponse | null>,
+    getSessionRelations: (sessionId: string): Promise<AgentSessionRelations | null> =>
+      ipcRenderer.invoke(
+        CODEX_GET_SESSION_RELATIONS,
+        sessionId
+      ) as Promise<AgentSessionRelations | null>,
     onSessionChange: (callback: (event: AgentSessionChangeEvent) => void): (() => void) => {
       const listener = (_e: Electron.IpcRendererEvent, data: AgentSessionChangeEvent): void =>
         callback(data);

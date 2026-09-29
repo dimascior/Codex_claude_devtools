@@ -18,6 +18,7 @@ import type {
   AgentSessionChangeEvent,
   AgentSessionDetailResponse,
   AgentSessionList,
+  AgentSessionRelations,
 } from '@main/domain';
 import type {
   ConversationGroup,
@@ -503,6 +504,11 @@ export interface CodexAPI {
     sessionId: string,
     knownFingerprint?: string
   ) => Promise<AgentSessionDetailResponse | null>;
+  /**
+   * Sessions this rollout spawned and the session that spawned it, or null for
+   * unknown/invalid session ids
+   */
+  getSessionRelations: (sessionId: string) => Promise<AgentSessionRelations | null>;
   /** Rollout added/changed/removed */
   onSessionChange: (callback: (event: AgentSessionChangeEvent) => void) => () => void;
 }

@@ -9,3 +9,4 @@ export type * from './Execution';
 export type * from './Message';
 export type * from './RuntimeState';
 export type * from './Session';
+export type * from './SessionRelation';

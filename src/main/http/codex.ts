@@ -4,6 +4,7 @@
  * Routes:
  * - GET /api/codex/sessions - List rollouts under $CODEX_HOME/sessions
  * - GET /api/codex/session?id=&fingerprint= - Normalized execution timeline
+ * - GET /api/codex/relations?id= - Spawned-child and spawned-by relations
  *
  * Change notifications are broadcast over SSE as `codex:session-change`.
  */
@@ -43,4 +44,17 @@ export function registerCodexRoutes(app: FastifyInstance, services: HttpServices
       }
     }
   );
+
+  app.get<{ Querystring: { id?: string } }>('/api/codex/relations', async (request) => {
+    const { id } = request.query;
+    if (typeof id !== 'string' || !id) {
+      return null;
+    }
+    try {
+      return await services.codexSessionService.getSessionRelations(id);
+    } catch (error) {
+      logger.error(`Error in GET /api/codex/relations for ${id}:`, error);
+      return null;
+    }
+  });
 }

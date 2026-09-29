@@ -7,6 +7,8 @@
  *   short-circuiting, mirroring the Claude `getSessionDetail` contract
  * - Parse live rollouts incrementally: rollouts are append-only, so only the
  *   bytes written since the previous request are read
+ * - Relate a rollout to the subagent rollouts it spawned and to the rollout
+ *   that spawned it (`CodexSessionRelations`)
  * - Forward watcher events as `session-change` events
  */
 
@@ -18,6 +20,7 @@ import { normalizeCodexRollout } from './CodexExecutionNormalizer';
 import { getCodexSessionsPath } from './codexPaths';
 import { readRolloutRecords } from './CodexRolloutParser';
 import { buildSessionSummary, CodexScanner, type RolloutFile } from './CodexScanner';
+import { type CachedRolloutRecords, CodexSessionRelations } from './CodexSessionRelations';
 import { CodexSessionWatcher, type CodexWatchEvent } from './CodexSessionWatcher';
 
 import type { CodexRolloutRecord } from './types';
@@ -26,6 +29,7 @@ import type {
   AgentSessionDetail,
   AgentSessionDetailResponse,
   AgentSessionList,
+  AgentSessionRelations,
 } from '@main/domain';
 
 const logger = createLogger('Codex:SessionService');
@@ -59,6 +63,7 @@ export class CodexSessionService extends EventEmitter {
   private readonly scanner: CodexScanner;
   private readonly watcher: CodexSessionWatcher | null;
   private readonly parsed = new Map<string, ParsedRolloutCache>();
+  private readonly relations: CodexSessionRelations;
   private listCache: { result: AgentSessionList; expiresAt: number } | null = null;
   private listInFlight: Promise<AgentSessionList> | null = null;
 
@@ -67,6 +72,9 @@ export class CodexSessionService extends EventEmitter {
     this.sessionsDir = options.sessionsDir ?? getCodexSessionsPath();
     this.scanner = options.scanner ?? new CodexScanner(this.sessionsDir);
     this.watcher = options.watch === false ? null : new CodexSessionWatcher(this.sessionsDir);
+    this.relations = new CodexSessionRelations(this.scanner, (sessionId) =>
+      this.cachedRecords(sessionId)
+    );
     this.watcher?.on('change', (event: CodexWatchEvent) => this.onWatchEvent(event));
   }
 
@@ -83,6 +91,7 @@ export class CodexSessionService extends EventEmitter {
     this.watcher?.stop();
     this.removeAllListeners();
     this.parsed.clear();
+    this.relations.clear();
     this.listCache = null;
   }
 
@@ -170,6 +179,15 @@ export class CodexSessionService extends EventEmitter {
   }
 
   /**
+   * Relations of a session to the subagent sessions it spawned and to the
+   * session that spawned it. Returns null when the session id is invalid, the
+   * file is gone or it cannot be read.
+   */
+  async getSessionRelations(sessionId: string): Promise<AgentSessionRelations | null> {
+    return this.relations.getRelations(sessionId);
+  }
+
+  /**
    * Read a rollout's records, incrementally when the cached prefix is still valid.
    * Returns the cacheable entry (complete lines only) and the records to
    * normalize, which additionally include an unterminated tail line (a write in
@@ -215,11 +233,25 @@ export class CodexSessionService extends EventEmitter {
     }
   }
 
+  /** Complete records already parsed for a session's detail. */
+  private cachedRecords(sessionId: string): CachedRolloutRecords | undefined {
+    const entry = this.parsed.get(sessionId);
+    return entry
+      ? {
+          ino: entry.ino,
+          records: entry.records,
+          offset: entry.offset,
+          nextLineNumber: entry.nextLineNumber,
+        }
+      : undefined;
+  }
+
   private onWatchEvent(event: CodexWatchEvent): void {
     this.listCache = null;
     if (event.type === 'unlink' && event.sessionId) {
       this.parsed.delete(event.sessionId);
     }
+    this.relations.onWatchEvent(event);
     const change: AgentSessionChangeEvent = {
       provider: 'codex',
       type: event.type,

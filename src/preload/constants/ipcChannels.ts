@@ -220,6 +220,9 @@ export const CODEX_LIST_SESSIONS = 'codex:listSessions';
 /** Get the normalized execution timeline of one Codex rollout */
 export const CODEX_GET_SESSION_DETAIL = 'codex:getSessionDetail';
 
+/** Get the spawned-child and spawned-by relations of one Codex rollout */
+export const CODEX_GET_SESSION_RELATIONS = 'codex:getSessionRelations';
+
 /** Codex rollout added/changed/removed (main → renderer) */
 export const CODEX_SESSION_CHANGE = 'codex:session-change';
 

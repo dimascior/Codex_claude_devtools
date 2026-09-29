@@ -4,7 +4,9 @@
  *
  * Pipeline: CodexScanner (discovery) → CodexRolloutParser (records) →
  * CodexExecutionNormalizer (+ CodexExecutionParser, CodexEventParser,
- * CodexMetadataParser) → AgentSessionDetail. CodexSessionService is the
+ * CodexMetadataParser) → AgentSessionDetail. Session relations:
+ * CodexSpawnObservations (spawn call ↔ started SubAgentActivity) →
+ * CodexSessionRelations → AgentSessionRelations. CodexSessionService is the
  * entry point used by IPC and HTTP handlers.
  */
 

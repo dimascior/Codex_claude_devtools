@@ -13,7 +13,10 @@ import { trimTrailingSeparators } from './codexPaths';
 import type { CodexRolloutRecord, CodexSessionMetaPayload } from './types';
 
 export interface CodexSessionMetadata {
+  /** `session_meta.id`, else `session_id` for producers without an id */
   threadId?: string;
+  /** `session_meta.id` exactly, the rollout's own thread (session relations join on it) */
+  sessionMetaId?: string;
   startedAt?: string;
   cwd?: string;
   originator?: string;
@@ -24,6 +27,12 @@ export interface CodexSessionMetadata {
   gitCommit?: string;
   repositoryUrl?: string;
   parentThreadId?: string;
+  /**
+   * Parent thread declared by a spawned subagent (`parent_thread_id`, else
+   * `source.subagent.thread_spawn.parent_thread_id`); a fork's `forked_from_id`
+   * is not a spawn
+   */
+  spawnParentThreadId?: string;
   agentNickname?: string;
   agentRole?: string;
   /**
@@ -43,6 +52,7 @@ export function parseSessionMeta(payload: Record<string, unknown>): CodexSession
 
   return {
     threadId: str(meta.id) ?? str(meta.session_id),
+    sessionMetaId: str(meta.id),
     startedAt: str(meta.timestamp),
     cwd: str(meta.cwd),
     originator: str(meta.originator),
@@ -53,6 +63,9 @@ export function parseSessionMeta(payload: Record<string, unknown>): CodexSession
     gitCommit: str(git?.commit_hash),
     repositoryUrl: str(git?.repository_url),
     parentThreadId: str(meta.parent_thread_id) ?? source.parentThreadId ?? str(meta.forked_from_id),
+    spawnParentThreadId:
+      str(meta.parent_thread_id) ??
+      (source.label === 'subagent:thread_spawn' ? source.parentThreadId : undefined),
     agentNickname: str(meta.agent_nickname) ?? source.agentNickname,
     agentRole: str(meta.agent_role) ?? str(meta.agent_type) ?? source.agentRole,
     historyStartOrdinal: positiveInteger(meta.subagent_history_start_ordinal),

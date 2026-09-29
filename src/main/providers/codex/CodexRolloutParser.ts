@@ -61,6 +61,11 @@ export interface ReadRolloutOptions {
   maxLines?: number;
   /** Stop once a record satisfies this predicate (it is included) */
   stopWhen?: (record: CodexRolloutRecord) => boolean;
+  /**
+   * Parse only the lines this accepts (a cheap byte-level pre-filter); the
+   * others are skipped but still counted, so line numbers stay exact
+   */
+  lineFilter?: (line: Buffer, lineNumber: number) => boolean;
 }
 
 export interface ReadRolloutResult {
@@ -113,6 +118,10 @@ export async function readRolloutRecords(
   }
 
   const handleLine = (lineBuffer: Buffer): boolean => {
+    if (options.lineFilter && !options.lineFilter(lineBuffer, lineNumber)) {
+      lineNumber++;
+      return false;
+    }
     const record = parseRolloutLine(lineBuffer.toString('utf8'), lineNumber);
     lineNumber++;
     if (record === undefined) {
@@ -159,7 +168,7 @@ export async function readRolloutRecords(
 
   let tail: CodexRolloutRecord | undefined;
   const remainder = stoppedEarly ? null : splitter.remainder();
-  if (remainder) {
+  if (remainder && (!options.lineFilter || options.lineFilter(remainder, lineNumber))) {
     tail = parseRolloutLine(remainder.toString('utf8'), lineNumber) ?? undefined;
   }
 

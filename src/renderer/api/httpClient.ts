@@ -10,6 +10,7 @@ import type {
   AgentSessionChangeEvent,
   AgentSessionDetailResponse,
   AgentSessionList,
+  AgentSessionRelations,
   AppConfig,
   ClaudeMdFileInfo,
   ClaudeRootFolderSelection,
@@ -673,6 +674,11 @@ export class HttpAPIClient implements ElectronAPI {
         }
       );
     },
+    getSessionRelations: (sessionId: string): Promise<AgentSessionRelations | null> =>
+      this.get<AgentSessionRelations | null>(
+        `/api/codex/relations?${new URLSearchParams({ id: sessionId }).toString()}`,
+        { reviveDates: false }
+      ),
     onSessionChange: (callback: (event: AgentSessionChangeEvent) => void): (() => void) =>
       this.addEventListener('codex:session-change', (data: unknown) =>
         callback(data as AgentSessionChangeEvent)
