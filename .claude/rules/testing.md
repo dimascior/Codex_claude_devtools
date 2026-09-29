@@ -70,7 +70,7 @@ test/
 │       ├── dateGrouping.test.ts
 │       ├── formatters.test.ts
 │       └── pathUtils.test.ts
-├── scripts/             # Fixture sanitizer contract (codexRolloutTranscript), survey runtime-state section (codexRolloutState)
+├── scripts/             # Fixture sanitizer contract and record selections (codexRolloutTranscript), survey runtime-state section (codexRolloutState)
 ├── shared/
 │   └── utils/           # Shared utilities
 │       ├── markdownSearchRendererAlignment.test.ts

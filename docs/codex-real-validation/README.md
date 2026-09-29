@@ -180,7 +180,9 @@ comes from the three newer rollouts alone.
 
 Tooling (not evidence):
     `scripts/codex-rollout-transcript.ts` is the sanitizer that produced the
-    `real-observed` fixtures. `test/scripts/codexRolloutTranscript.test.ts`
+    `real-observed` fixtures. `--select relations` and `--select file-changes`
+    keep only the records one kind of evidence needs (with their real line
+    numbers), for rollouts too large to transcribe whole. `test/scripts/codexRolloutTranscript.test.ts`
     checks that commands, outputs, cwd, paths, URLs, `parsed_cmd` name/path,
     chosen agent, task, role and tool names and model names cannot survive
     it, and that every committed fixture is unchanged by the current rules
@@ -228,7 +230,37 @@ compatibility evidence. Real-derived join fixtures would need a sanitizer rule
 that keeps `agent_thread_id` UUIDs and fixtures regenerated from the raw
 rollouts on the evidence machine.
 
-## Sanitizer contract (version 2)
+## Local pass: real-derived relation and file-change fixtures
+
+The committed fixtures cannot show a subagent join or which files a change
+touched (see above). Sanitizer version 3 keeps both, so the next fixtures cut
+on the evidence machine can. Steps, from the repository root, against the
+frozen snapshot `codex-corpus-2026-09-28` (never the live directory):
+
+1. Children, whole files (small): regenerate `subagent-thread-spawn.jsonl`
+   and `subagent-declared-boundary.jsonl` from the rollouts named in their
+   headers, with
+   `pnpm exec tsx scripts/codex-rollout-transcript.ts --file SNAPSHOT/… --out tests/fixtures/codex/real-observed/NAME.jsonl`.
+2. Parents, relation records only: the rollout of thread
+   `01a09d90-2086-7f92-9e12-670bc277cf90` (parent of the first child) and both
+   rollouts of thread `01a07967-8252-7b21-8524-3164700549b1` (parent of the
+   second: `2026/09/06/rollout-2026-09-06T21-07-02-01a07967-…` and its
+   continuation `2026/09/10/rollout-2026-09-10T00-15-28-01a07967-…_01a08987-…`),
+   each with `--select relations` into a new `subagent-parent-*.jsonl`.
+3. File changes: rollouts with `FileChange` items (the newest large rollout
+   has many) and the one with `patch_apply_end` events, each with
+   `--select file-changes` into a new `file-changes-*.jsonl`.
+4. Run `pnpm exec tsx scripts/codex-rollout-survey.ts --all` and read "File
+   lists (files written)": a row for a non-patch execution with a
+   file-change record answers whether Codex records file changes under the
+   id of a shell call.
+5. Review every new fixture before committing (`pnpm test` checks the
+   contract; paths must appear only as `<path-N>`), then add regression tests:
+   parent → child and child → parent resolve over the transcripts written back
+   as rollouts, only one of the two `01a07967-…` files holds the spawn of
+   `01a08b56-…`, and parsed file changes keep their types, moves and counts.
+
+## Sanitizer contract (version 3)
 
 Each transcript line is `{"line": N, "bytes": B, ...record}` where `line` is the
 1-based line number in the real rollout and `bytes` is the raw line length.
@@ -237,7 +269,9 @@ Headers carry `sanitizer_version`.
 Preserved, when the value has the shape its key allows: record type, payload
 type, ordering, ordinals, ISO timestamps, CLI versions, provider-generated ids
 (UUIDs, `call_…`/`ws_…`/`rs_…`-style opaque ids, counters such as `item-17`,
-built-in `:…` ids), status, role, phase, single-token enum settings, model
+built-in `:…` ids) including the thread a `SubAgentActivity` names
+(`agent_thread_id`, since version 3), status, role, phase, single-token enum
+settings, model
 provider ids Codex defines (`openai`, `ollama`, `lmstudio`, `amazon-bedrock…`),
 tool names and namespaces that Codex defines (built-in tools, `clock`,
 `collaboration`, `web`, `mcp__node_repl`, `mcp__cua_repl`,
@@ -251,14 +285,20 @@ every segment below it (`/root/<task-1>`), task names (`<task-N>`), agent
 nicknames (`<agent-N>`), agent roles (`<role-N>`), tool names and MCP servers
 Codex does not define (`<tool-N>`, `mcp__<server-N>`), model identifiers
 (`model`, `from_model`, `to_model`: `<model-N>`), other model provider ids
-(`<provider-N>`), ids that are not provider-generated (`<id-N>`) and object
-keys that are not plain identifiers (`<key-N>`).
+(`<provider-N>`), ids that are not provider-generated (`<id-N>`), object
+keys that are not plain identifiers (`<key-N>`) and, since version 3, file
+paths in file-change maps (`<path-N>`): the `changes` of `FileChange` items and
+`patch_apply_end` events keep one entry per file, keyed by its path alias,
+with the change `type` (`add`, `update`, `delete`) and an aliased `move_path`;
+contents and diffs are replaced. One alias table per transcript, so a file
+changed twice, or moved and changed again, keeps one alias.
 
 Replaced: every other string becomes `<string:N>` (N = original length);
 omitted arrays/objects become `<array:N>` / `<object:N>`. This covers message
 text, reasoning, arguments, inputs, outputs, stdout/stderr, commands, cwd,
-paths, URLs, git info, and `parsed_cmd` entries (only their `type` is kept).
-Arrays other than `content` are truncated to 12 items.
+paths, URLs, git info, file contents and diffs, and `parsed_cmd` entries
+(only their `type` is kept). A `changes` value that is not a map of files is
+replaced by its size. Arrays other than `content` are truncated to 12 items.
 
 `--resanitize TRANSCRIPT` applies these rules to an existing transcript,
 keeping `line`, `bytes`, placeholders, aliases and `_evidence_*` separators.
@@ -266,8 +306,10 @@ The committed fixtures were produced by version 1 and brought to version 2
 this way, because the raw rollouts are not available outside the evidence
 machine: agent nicknames, inter-agent recipients and model names were
 aliased, and values version 1 had already reduced (such as `agent_path`) stay
-`<string:N>`. Regenerating a fixture from its raw rollout with version 2
-aliases those as well.
+`<string:N>`. Bringing them to version 3 changed only their headers: their
+`agent_thread_id` values are still `<string:36>` and their `changes` maps
+`<object:N>`, so they show neither subagent joins nor which files changed.
+Regenerating a fixture from its raw rollout with version 3 keeps both.
 
 ## Interpretation caution
 

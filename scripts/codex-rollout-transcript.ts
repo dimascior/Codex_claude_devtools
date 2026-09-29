@@ -17,7 +17,14 @@
  *   ids that Codex does not define are replaced by deterministic aliases such
  *   as "<task-1>", "<agent-1>", "mcp__<server-1>" or "<model-1>". Within one
  *   transcript the same value always gets the same alias, so equality
- *   survives; the alias says nothing else about the value.
+ *   survives; the alias says nothing else about the value;
+ * - file-change maps (`changes` of `FileChange` items and `patch_apply_end`
+ *   events) keep their structure: each file path becomes "<path-N>" (keys and
+ *   `move_path`, one alias table per transcript), the change `type` is kept
+ *   and file contents and diffs are replaced;
+ * - `agent_thread_id` (the thread a SubAgentActivity names) is kept when it is
+ *   a provider id, like the other thread ids, so subagent relations can be
+ *   joined across transcripts.
  *
  * `--resanitize` applies the current rules to an existing transcript (for
  * example a committed fixture) without the raw rollout: placeholders and
@@ -28,8 +35,12 @@
  * tests/fixtures/codex/real-observed but is not itself empirical evidence of
  * Codex behaviour; see docs/codex-real-validation/README.md.
  *
+ * `--select relations|file-changes` keeps only the records one kind of
+ * evidence needs (see `SELECTIONS`), so it can be cut from rollouts too large
+ * to commit whole; kept records carry their real line numbers.
+ *
  * Usage (from the repository root):
- *   pnpm exec tsx scripts/codex-rollout-transcript.ts --file ROLLOUT.jsonl --out FILE
+ *   pnpm exec tsx scripts/codex-rollout-transcript.ts --file ROLLOUT.jsonl --out FILE [--select NAME]
  *   pnpm exec tsx scripts/codex-rollout-transcript.ts --resanitize TRANSCRIPT.jsonl [--out FILE]
  */
 
@@ -39,7 +50,7 @@ import * as readline from 'readline';
 import { fileURLToPath } from 'url';
 
 /** Version of the rules below; written into transcript headers. */
-export const SANITIZER_VERSION = 2;
+export const SANITIZER_VERSION = 3;
 
 // Keys whose string values are structural (type names, enum values, IDs,
 // versions, timestamps). Their values are still shape-checked.
@@ -57,6 +68,7 @@ export const KEEP_STRING_KEYS = new Set([
   'session_id',
   'forked_from_id',
   'parent_thread_id',
+  'agent_thread_id',
   'originator',
   'cli_version',
   'source',
@@ -135,7 +147,11 @@ const ID_KEYS = new Set([
   'session_id',
   'forked_from_id',
   'parent_thread_id',
+  'agent_thread_id',
 ]);
+
+/** File-change maps: file path → `{type, move_path?, content | unified_diff}`. */
+const FILE_CHANGES_KEY = 'changes';
 
 const TIMESTAMP_KEYS = new Set([
   'timestamp',
@@ -247,9 +263,10 @@ const ALIAS_KINDS = [
   'key',
   'model',
   'provider',
+  'path',
 ] as const;
 type AliasKind = (typeof ALIAS_KINDS)[number];
-const ALIAS = /^<(agent|task|role|tool|server|namespace|id|key|model|provider)-(\d+)>$/;
+const ALIAS = /^<(agent|task|role|tool|server|namespace|id|key|model|provider|path)-(\d+)>$/;
 
 /** Whether a string is output of this sanitizer (size placeholder or alias). */
 export function isSanitizedToken(value: string): boolean {
@@ -373,6 +390,10 @@ export class TranscriptSanitizer {
     for (const [rawKey, v] of Object.entries(value)) {
       const k =
         OBJECT_KEY.test(rawKey) || isSanitizedToken(rawKey) ? rawKey : this.alias('key', rawKey);
+      if (k === FILE_CHANGES_KEY && isPlainObject(v)) {
+        out[k] = this.fileChanges(v);
+        continue;
+      }
       if (OMIT_KEYS.has(k)) {
         if (k === 'content' && Array.isArray(v)) {
           out[k] = this.array(v, k);
@@ -384,6 +405,41 @@ export class TranscriptSanitizer {
       out[k] = typeof v === 'string' ? this.string(v, k, value) : this.value(v, k);
     }
     return out;
+  }
+
+  /**
+   * A file-change map: every file path becomes `<path-N>`, each change keeps
+   * its `type` and an aliased `move_path`; contents, diffs and anything else
+   * are replaced by their size.
+   */
+  private fileChanges(changes: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const [filePath, change] of Object.entries(changes)) {
+      const key = this.pathAlias(filePath);
+      if (!isPlainObject(change)) {
+        out[key] = typeof change === 'string' && isSanitizedToken(change) ? change : sizeOf(change);
+        continue;
+      }
+      const sanitized: Record<string, unknown> = {};
+      for (const [field, value] of Object.entries(change)) {
+        if (field === 'type' && typeof value === 'string') {
+          sanitized[field] = this.string(value, 'type', change);
+        } else if (field === 'move_path' && typeof value === 'string') {
+          sanitized[field] = this.pathAlias(value);
+        } else if (field === 'move_path' && value === null) {
+          sanitized[field] = null;
+        } else {
+          sanitized[field] =
+            typeof value === 'string' && isSanitizedToken(value) ? value : sizeOf(value);
+        }
+      }
+      out[key] = sanitized;
+    }
+    return out;
+  }
+
+  private pathAlias(value: string): string {
+    return isSanitizedToken(value) ? value : this.alias('path', value);
   }
 
   /** `/root/a/b` → `/root/<task-1>/<task-2>`; other values → `<agent-N>`. */
@@ -442,6 +498,10 @@ export class TranscriptSanitizer {
     table.set(value, alias);
     return alias;
   }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** Sanitize a single value with fresh aliases (convenience for one-off use). */
@@ -507,28 +567,192 @@ export function resanitizeTranscript(lines: readonly string[]): string[] {
   });
 }
 
-function parseArgs(argv: string[]): { file: string; out: string; resanitize: boolean } {
+// =============================================================================
+// Record selections
+// =============================================================================
+
+/** What a rollout record looks like before sanitizing (only structure is read). */
+interface RawRecord {
+  type?: unknown;
+  payload?: Record<string, unknown>;
+}
+
+/** Ids gathered in a first pass over the rollout, for selections that need them. */
+interface SelectionIds {
+  /** Ids of `FileChange` items and `patch_apply_end` events */
+  fileChanges: Set<string>;
+}
+
+interface Selection {
+  description: string;
+  /** Whether a record belongs to the selection; `kept` holds call ids kept so far */
+  keep: (record: RawRecord, ids: SelectionIds, kept: Set<string>) => boolean;
+}
+
+const TURN_EVENTS = new Set(['task_started', 'task_complete', 'turn_aborted']);
+const CALL_TYPES = new Set(['function_call', 'custom_tool_call', 'local_shell_call']);
+const OUTPUT_TYPES = new Set(['function_call_output', 'custom_tool_call_output']);
+
+function payloadOf(record: RawRecord): Record<string, unknown> {
+  return record.payload && typeof record.payload === 'object' ? record.payload : {};
+}
+
+function completedItemType(record: RawRecord): unknown {
+  const payload = payloadOf(record);
+  if (record.type !== 'event_msg' || payload.type !== 'item_completed') return undefined;
+  const item = payload.item;
+  return item && typeof item === 'object' ? (item as Record<string, unknown>).type : undefined;
+}
+
+/**
+ * Evidence selections. Line 1 (session metadata) is always kept, and so are
+ * the turn and settings records the viewer needs to place the others.
+ */
+export const SELECTIONS: Record<string, Selection> = {
+  relations: {
+    description:
+      'Subagent relations: session_meta, turn and thread-settings records, collaboration calls (spawn_agent, send_message, …), SubAgentActivity items and inter-agent messages.',
+    keep: (record) => {
+      const payload = payloadOf(record);
+      switch (record.type) {
+        case 'session_meta':
+        case 'turn_context':
+        case 'inter_agent_communication_metadata':
+          return true;
+        case 'event_msg':
+          return (
+            TURN_EVENTS.has(String(payload.type)) ||
+            payload.type === 'thread_settings_applied' ||
+            completedItemType(record) === 'SubAgentActivity'
+          );
+        case 'response_item':
+          return (
+            (payload.type === 'function_call' && payload.namespace === 'collaboration') ||
+            payload.type === 'agent_message'
+          );
+        default:
+          return false;
+      }
+    },
+  },
+  'file-changes': {
+    description:
+      "File changes: session_meta and turn records, FileChange items, patch_apply_end events, the calls sharing their ids or named apply_patch, and those calls' outputs.",
+    keep: (record, ids, kept) => {
+      const payload = payloadOf(record);
+      switch (record.type) {
+        case 'session_meta':
+        case 'turn_context':
+          return true;
+        case 'event_msg':
+          return (
+            TURN_EVENTS.has(String(payload.type)) ||
+            payload.type === 'patch_apply_end' ||
+            completedItemType(record) === 'FileChange'
+          );
+        case 'response_item': {
+          const callId = typeof payload.call_id === 'string' ? payload.call_id : undefined;
+          if (CALL_TYPES.has(String(payload.type))) {
+            const keep =
+              payload.name === 'apply_patch' ||
+              (callId !== undefined && ids.fileChanges.has(callId));
+            if (keep && callId !== undefined) kept.add(callId);
+            return keep;
+          }
+          return OUTPUT_TYPES.has(String(payload.type)) && callId !== undefined && kept.has(callId);
+        }
+        default:
+          return false;
+      }
+    },
+  },
+};
+
+function parseRaw(line: string): RawRecord | undefined {
+  try {
+    const value = JSON.parse(line) as unknown;
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as RawRecord)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function* rolloutLines(file: string): AsyncGenerator<string> {
+  const rl = readline.createInterface({
+    input: fs.createReadStream(file, { encoding: 'utf8' }),
+    crlfDelay: Infinity,
+  });
+  for await (const line of rl) yield line;
+}
+
+/**
+ * The 1-based line numbers of a rollout that belong to a selection. Reads the
+ * rollout twice: once for the ids file-change records carry, once to decide.
+ */
+export async function selectedLines(file: string, name: string): Promise<Set<number>> {
+  const selection = SELECTIONS[name];
+  if (!selection) {
+    throw new Error(`Unknown selection "${name}" (known: ${Object.keys(SELECTIONS).join(', ')})`);
+  }
+  const ids: SelectionIds = { fileChanges: new Set() };
+  for await (const line of rolloutLines(file)) {
+    const record = parseRaw(line);
+    if (!record) continue;
+    const payload = payloadOf(record);
+    if (record.type === 'event_msg' && payload.type === 'patch_apply_end') {
+      if (typeof payload.call_id === 'string') ids.fileChanges.add(payload.call_id);
+    } else if (completedItemType(record) === 'FileChange') {
+      const id = (payload.item as Record<string, unknown>).id;
+      if (typeof id === 'string') ids.fileChanges.add(id);
+    }
+  }
+  const lines = new Set<number>();
+  const kept = new Set<string>();
+  let lineNumber = 0;
+  for await (const line of rolloutLines(file)) {
+    lineNumber++;
+    const record = parseRaw(line);
+    if (lineNumber === 1 || (record && selection.keep(record, ids, kept))) {
+      lines.add(lineNumber);
+    }
+  }
+  return lines;
+}
+
+function parseArgs(argv: string[]): {
+  file: string;
+  out: string;
+  resanitize: boolean;
+  select?: string;
+} {
   let file = '';
   let out = '';
   let resanitize = false;
+  let select: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--file') file = argv[++i] ?? '';
     else if (argv[i] === '--resanitize') {
       resanitize = true;
       file = argv[++i] ?? '';
     } else if (argv[i] === '--out') out = argv[++i] ?? '';
+    else if (argv[i] === '--select') select = argv[++i] ?? '';
   }
   if (!file) throw new Error('--file ROLLOUT.jsonl or --resanitize TRANSCRIPT.jsonl is required');
+  if (select !== undefined && !SELECTIONS[select]) {
+    throw new Error(`--select must be one of: ${Object.keys(SELECTIONS).join(', ')}`);
+  }
   if (!out) {
     out = resanitize
       ? file
       : path.join('real-data', `${path.basename(file, '.jsonl')}.structural.jsonl`);
   }
-  return { file, out, resanitize };
+  return { file, out, resanitize, select };
 }
 
 async function main(): Promise<void> {
-  const { file, out, resanitize } = parseArgs(process.argv.slice(2));
+  const { file, out, resanitize, select } = parseArgs(process.argv.slice(2));
   fs.mkdirSync(path.dirname(out), { recursive: true });
 
   if (resanitize) {
@@ -541,34 +765,39 @@ async function main(): Promise<void> {
     return;
   }
 
+  const keep = select ? await selectedLines(file, select) : undefined;
   const writer = fs.createWriteStream(out, { encoding: 'utf8' });
   const header = {
     transcript: 'codex-rollout-structural',
     generated: new Date().toISOString(),
     rollout_file: path.basename(file),
     rollout_bytes: fs.statSync(file).size,
-    note: 'Free-text strings replaced by <string:N>; chosen names and model identifiers by deterministic aliases; ordering, types and provider IDs preserved.',
+    note: 'Free-text strings replaced by <string:N>; chosen names, file paths and model identifiers by deterministic aliases; ordering, types and provider IDs preserved.',
+    ...(select ? { selection: select, selection_note: SELECTIONS[select].description } : {}),
     sanitizer_version: SANITIZER_VERSION,
   };
   writer.write(JSON.stringify(header) + '\n');
 
-  const rl = readline.createInterface({
-    input: fs.createReadStream(file, { encoding: 'utf8' }),
-    crlfDelay: Infinity,
-  });
-
   const sanitizer = new TranscriptSanitizer();
   let lineNumber = 0;
   let failed = 0;
-  for await (const raw of rl) {
+  let written = 0;
+  for await (const raw of rolloutLines(file)) {
     lineNumber++;
+    if (keep && !keep.has(lineNumber)) continue;
     const record = sanitizer.line(raw, lineNumber);
     if (record.parse_error) failed++;
     writer.write(JSON.stringify(record) + '\n');
+    written++;
   }
 
   writer.write(
-    JSON.stringify({ transcript_end: true, lines: lineNumber, parse_failed: failed }) + '\n'
+    JSON.stringify({
+      transcript_end: true,
+      lines: lineNumber,
+      ...(keep ? { kept: written } : {}),
+      parse_failed: failed,
+    }) + '\n'
   );
   await new Promise<void>((resolve, reject) => {
     writer.end(() => resolve());

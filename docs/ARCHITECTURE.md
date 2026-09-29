@@ -288,9 +288,10 @@ child:  session_meta.id = T
   data to its host).
 - Real-derived test fixtures are sanitized by
   `scripts/codex-rollout-transcript.ts`: free text becomes `<string:N>`, chosen
-  names (agent paths, task names, nicknames, roles, non-Codex tools) and model
-  names become deterministic aliases, and a test checks that every committed
-  fixture already satisfies the current rules. See the sanitizer contract in
+  names (agent paths, task names, nicknames, roles, non-Codex tools), model
+  names and file paths become deterministic aliases (file contents and diffs
+  are dropped), and a test checks that every committed fixture already
+  satisfies the current rules. See the sanitizer contract in
   [codex-real-validation/README.md](codex-real-validation/README.md).
 
 ## Local HTTP trust boundary
