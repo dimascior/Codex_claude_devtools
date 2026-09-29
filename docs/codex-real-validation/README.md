@@ -168,6 +168,23 @@ comes from the three newer rollouts alone.
       compaction (4100/4111). `session_meta` names 0.142.0-alpha.6; the
       records from line 1000 on have newer record types and fields (a resume
       by a newer producer is consistent with that).
+    - `subagent-family-simple-parent.jsonl` and
+      `subagent-family-simple-child.jsonl`: sanitizer v3, `--select relations`.
+      Parent thread `01a09d90-…` (cli 0.153.0, codex_vscode) spawns two children
+      via `spawn_agent` + `SubAgentActivity(started)`, proving the explicit id
+      chain: `call_id` = activity id = child `session_meta.id`. The child
+      declares `parent_thread_id` matching the parent and
+      `subagent_history_start_ordinal: 55`.
+    - `subagent-continuation-parent.jsonl` and
+      `subagent-continuation-child.jsonl`: sanitizer v3, `--select relations`.
+      A continuation file of thread `01a07967-…` (cli 0.153.4, ordinals from
+      816, `history_base`) spawns child `01a0898c-…` via the same chain. The
+      child carries two `session_meta` records (its own + the parent's
+      continuation meta from inherited history).
+    - `file-changes-operations.jsonl`: sanitizer v3, `--select file-changes`.
+      Three `FileChange` items from thread `01a09d90-…` showing `add`
+      (`<path-1>`), `update` (`<path-1>`), and `delete` (`<path-14>`). No `move`
+      type was found in the 61-rollout corpus.
 
 `parser-findings.md`
     Analysis of the Codex parser against this evidence: findings table,
@@ -219,46 +236,32 @@ identifies a relation:
   parent for one child.
 - agent paths and timing: structure and order, not identities.
 
-The sanitized fixtures cannot show the join: sanitizer versions 1 and 2
-replace `agent_thread_id` with `<string:36>`. `subagent-thread-spawn.jsonl`
-still shows that a `started` item copied into a subagent's inherited prefix
-(line 19) is not that subagent's own spawn. The join itself is
-regression-tested on a labelled synthetic family
-(`test/fixtures/codex/subagentFamily.ts`, used by
-`test/main/providers/codex/sessionRelations.test.ts`), which is not
-compatibility evidence. Real-derived join fixtures would need a sanitizer rule
-that keeps `agent_thread_id` UUIDs and fixtures regenerated from the raw
-rollouts on the evidence machine.
+Sanitizer v1/v2 fixtures cannot show the join (`agent_thread_id` replaced with
+`<string:36>`). Sanitizer v3 preserves `agent_thread_id` UUIDs, and the v3
+fixtures (`subagent-family-simple-*.jsonl`, `subagent-continuation-*.jsonl`)
+prove the full chain on real records: `call_id` = activity id → child thread.
+`test/main/providers/codex/realDerivedEvidence.test.ts` regression-tests it.
+The synthetic family (`test/fixtures/codex/subagentFamily.ts`, used by
+`test/main/providers/codex/sessionRelations.test.ts`) still tests resolution
+logic beyond what the fixture excerpts cover.
 
 ## Local pass: real-derived relation and file-change fixtures
 
-The committed fixtures cannot show a subagent join or which files a change
-touched (see above). Sanitizer version 3 keeps both, so the next fixtures cut
-on the evidence machine can. Steps, from the repository root, against the
-frozen snapshot `codex-corpus-2026-09-28` (never the live directory):
+Sanitizer version 3 keeps `agent_thread_id` UUIDs and file-change path maps,
+so fixtures generated from it can show subagent joins and which files a change
+touched. The following fixtures were produced on 2026-09-29 from the frozen
+`codex-corpus-2026-09-28` snapshot using `--select relations` and
+`--select file-changes`:
 
-1. Children, whole files (small): regenerate `subagent-thread-spawn.jsonl`
-   and `subagent-declared-boundary.jsonl` from the rollouts named in their
-   headers, with
-   `pnpm exec tsx scripts/codex-rollout-transcript.ts --file SNAPSHOT/… --out tests/fixtures/codex/real-observed/NAME.jsonl`.
-2. Parents, relation records only: the rollout of thread
-   `01a09d90-2086-7f92-9e12-670bc277cf90` (parent of the first child) and both
-   rollouts of thread `01a07967-8252-7b21-8524-3164700549b1` (parent of the
-   second: `2026/09/06/rollout-2026-09-06T21-07-02-01a07967-…` and its
-   continuation `2026/09/10/rollout-2026-09-10T00-15-28-01a07967-…_01a08987-…`),
-   each with `--select relations` into a new `subagent-parent-*.jsonl`.
-3. File changes: rollouts with `FileChange` items (the newest large rollout
-   has many) and the one with `patch_apply_end` events, each with
-   `--select file-changes` into a new `file-changes-*.jsonl`.
-4. Run `pnpm exec tsx scripts/codex-rollout-survey.ts --all` and read "File
-   lists (files written)": a row for a non-patch execution with a
-   file-change record answers whether Codex records file changes under the
-   id of a shell call.
-5. Review every new fixture before committing (`pnpm test` checks the
-   contract; paths must appear only as `<path-N>`), then add regression tests:
-   parent → child and child → parent resolve over the transcripts written back
-   as rollouts, only one of the two `01a07967-…` files holds the spawn of
-   `01a08b56-…`, and parsed file changes keep their types, moves and counts.
+- `subagent-family-simple-parent.jsonl` + `subagent-family-simple-child.jsonl`:
+  two-child family from thread `01a09d90-…`, proving the explicit id chain.
+- `subagent-continuation-parent.jsonl` + `subagent-continuation-child.jsonl`:
+  spawn from a continuation file of thread `01a07967-…` (ordinals from 816).
+- `file-changes-operations.jsonl`: add, update, delete `FileChange` items.
+
+Regression tests: `test/main/providers/codex/realDerivedEvidence.test.ts` (19
+assertions covering the spawn chain, continuation handling, and file-change
+operations). All new fixtures pass the sanitizer contract and privacy audit.
 
 ## Sanitizer contract (version 3)
 
