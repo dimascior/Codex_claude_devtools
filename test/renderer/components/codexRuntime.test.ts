@@ -126,7 +126,12 @@ function detailOf(session: NormalizedCodexSession): AgentSessionDetail {
 
 function header(detail: AgentSessionDetail): string {
   return renderToStaticMarkup(
-    createElement(CodexSessionHeader, { detail, filter: 'all', onFilterChange: () => undefined })
+    createElement(CodexSessionHeader, {
+      detail,
+      filter: 'all',
+      onFilterChange: () => undefined,
+      onOpenRelated: () => undefined,
+    })
   );
 }
 

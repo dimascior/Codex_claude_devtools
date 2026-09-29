@@ -1,9 +1,11 @@
 /**
  * CodexExecutionDetails - Expanded body of an execution: exact command,
  * execution facts (cwd, exit code, timing, files written, Codex's own command
- * classification), provenance (ids, records, links), the effective runtime of
- * its turn, input, output.
+ * classification), provenance (ids, records, links), the session it spawned
+ * (for spawn executions), the effective runtime of its turn, input, output.
  */
+
+import { useContext } from 'react';
 
 import { CodeBlockViewer } from '@renderer/components/chat/viewers/CodeBlockViewer';
 import { CopyablePath } from '@renderer/components/common/CopyablePath';
@@ -20,6 +22,8 @@ import {
 import { CodexOutputBlock } from './CodexOutputBlock';
 import { CodexPatchView } from './CodexPatchView';
 import { CodexProvenance } from './CodexProvenance';
+import { CodexRelationDetails } from './CodexRelationDetails';
+import { CodexRelationsContext } from './codexRelationsContext';
 import { CodexRuntimeDetails } from './CodexRuntimeDetails';
 
 import type { Execution } from '@shared/types';
@@ -127,6 +131,7 @@ export const CodexExecutionDetails = ({
 }: CodexExecutionDetailsProps): React.JSX.Element => {
   const facts = buildFacts(exec);
   const patch = patchText(exec);
+  const childRelation = useContext(CodexRelationsContext).childrenByExecutionId.get(exec.id);
   const outputCount = exec.outputCount ?? 0;
   const argvDiffers =
     exec.argv !== undefined && exec.argv.length > 0 && exec.argv.join(' ') !== exec.command;
@@ -163,6 +168,7 @@ export const CodexExecutionDetails = ({
       </dl>
 
       <CodexProvenance execution={exec} />
+      {childRelation && <CodexRelationDetails relation={childRelation} />}
       <CodexRuntimeDetails execution={exec} />
 
       {exec.kind === 'code_cell' && exec.input && (

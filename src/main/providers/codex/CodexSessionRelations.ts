@@ -56,8 +56,11 @@ import type {
 
 const logger = createLogger('Codex:SessionRelations');
 
-/** How long the list of rollout files is reused (watcher add/unlink events clear it sooner). */
-const FILE_LIST_TTL_MS = 2000;
+/**
+ * How long the list of rollout files is reused. Watcher add/unlink events clear
+ * it at once; the expiry only covers events the watcher missed.
+ */
+const FILE_LIST_TTL_MS = 10_000;
 /** Rollouts whose spawn records are kept for incremental re-reads. */
 const MAX_OBSERVED_FILES = 64;
 

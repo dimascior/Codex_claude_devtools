@@ -5,9 +5,11 @@
  * Context line: what Codex recorded the command as doing, where it ran and
  * how Codex encoded it.
  * Code cells always show their nested-call tree; details expand on click.
+ * A spawn execution shows the child session it started, with its own "Open
+ * child" button (the card itself never navigates).
  */
 
-import { useState } from 'react';
+import { useContext, useState } from 'react';
 
 import {
   CARD_BG,
@@ -23,6 +25,7 @@ import {
 import { formatDuration } from '@renderer/utils/formatters';
 import { ChevronRight } from 'lucide-react';
 
+import { CodexChildSessionLink } from './CodexChildSessionLink';
 import { CodexCommandActions } from './CodexCommandActions';
 import { CodexExecutionDetails } from './CodexExecutionDetails';
 import {
@@ -36,6 +39,7 @@ import {
   statusAppearance,
 } from './codexFormatting';
 import { CodexNestedExecutions } from './CodexNestedExecutions';
+import { CodexRelationsContext } from './codexRelationsContext';
 import { CodexStatusBadge } from './CodexStatusBadge';
 
 import type { Execution } from '@shared/types';
@@ -83,6 +87,8 @@ export const CodexExecutionCard = ({
   const actions = classifiedActions(exec);
   const isCell = exec.kind === 'code_cell';
   const appearance = statusAppearance(exec.status);
+  const { childrenByExecutionId, openRelated } = useContext(CodexRelationsContext);
+  const childRelation = childrenByExecutionId.get(exec.id);
 
   return (
     <div
@@ -149,6 +155,12 @@ export const CodexExecutionCard = ({
           </div>
         )}
       </button>
+
+      {childRelation && (
+        <div className="px-3 pb-2 pl-[40px]">
+          <CodexChildSessionLink relation={childRelation} onOpen={openRelated} />
+        </div>
+      )}
 
       {isCell && (exec.children?.length ?? 0) > 0 && (
         <div className="px-3 pb-2 pl-[38px]">

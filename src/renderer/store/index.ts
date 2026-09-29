@@ -71,6 +71,7 @@ export function initializeNotificationListeners(): () => void {
   const PROJECT_REFRESH_DEBOUNCE_MS = 300;
   const CODEX_LIST_REFRESH_DEBOUNCE_MS = 400;
   const CODEX_DETAIL_REFRESH_THROTTLE_MS = 250;
+  const CODEX_RELATIONS_REFRESH_THROTTLE_MS = 1000;
   const getBaseProjectId = (projectId: string | null | undefined): string | null => {
     if (!projectId) return null;
     const separatorIndex = projectId.indexOf('::');
@@ -400,9 +401,13 @@ export function initializeNotificationListeners(): () => void {
   }
 
   // Codex rollouts: refresh the listing (debounced) and the selected session
-  // (throttled, so a continuously appended live rollout keeps updating).
+  // (throttled, so a continuously appended live rollout keeps updating). The
+  // selected session's relations depend on other rollouts too (a spawned
+  // child's file appearing or being deleted), so any change refreshes them
+  // (throttled, after the detail refresh).
   let codexListTimer: ReturnType<typeof setTimeout> | null = null;
   let codexDetailTimer: ReturnType<typeof setTimeout> | null = null;
+  let codexRelationsTimer: ReturnType<typeof setTimeout> | null = null;
   if (api.codex?.onSessionChange) {
     const cleanup = api.codex.onSessionChange((event) => {
       const state = useStore.getState();
@@ -421,6 +426,13 @@ export function initializeNotificationListeners(): () => void {
           codexDetailTimer = null;
           void useStore.getState().refreshCodexDetail();
         }, CODEX_DETAIL_REFRESH_THROTTLE_MS);
+      }
+
+      if (state.codexSelectedSessionId && !codexRelationsTimer) {
+        codexRelationsTimer = setTimeout(() => {
+          codexRelationsTimer = null;
+          void useStore.getState().refreshCodexRelations();
+        }, CODEX_RELATIONS_REFRESH_THROTTLE_MS);
       }
     });
     if (typeof cleanup === 'function') {
@@ -456,6 +468,7 @@ export function initializeNotificationListeners(): () => void {
     pendingProjectRefreshTimers.clear();
     if (codexListTimer) clearTimeout(codexListTimer);
     if (codexDetailTimer) clearTimeout(codexDetailTimer);
+    if (codexRelationsTimer) clearTimeout(codexRelationsTimer);
     cleanupFns.forEach((fn) => fn());
   };
 }

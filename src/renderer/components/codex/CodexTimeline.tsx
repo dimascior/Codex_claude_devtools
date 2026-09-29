@@ -1,10 +1,12 @@
 /**
  * CodexTimeline - Chronological view of a Codex session: requests, agent
  * messages, reasoning, executions, turn events and settings changes, in rollout
- * order. Provides each turn's effective runtime state to execution details.
+ * order. Provides each turn's effective runtime state and the session's
+ * spawned-child relations to execution cards, and brings a requested execution
+ * (the spawn call a child session was opened from) into view.
  */
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 
 import { COLOR_TEXT_MUTED } from '@renderer/constants/cssVariables';
 import { useAutoScrollBottom } from '@renderer/hooks/useAutoScrollBottom';
@@ -15,17 +17,27 @@ import { CodexExecutionCard } from './CodexExecutionCard';
 import { type CodexTimelineFilter, filterTimeline, formatClockTime } from './codexFormatting';
 import { CodexMessageItem } from './CodexMessageItem';
 import { CodexReasoningItem } from './CodexReasoningItem';
+import { CodexRelationsContext } from './codexRelationsContext';
 import { TurnRuntimeContext } from './codexRuntimeContext';
 import { turnStatesById } from './codexRuntimeFormatting';
 import { CodexSettingsChangeItem } from './CodexSettingsChangeItem';
 
-import type { AgentSessionDetail, TimelineEntry } from '@shared/types';
+import type { AgentSessionDetail, AgentSessionRelation, TimelineEntry } from '@shared/types';
+
+/** How long a focused execution stays highlighted. */
+const FOCUS_HIGHLIGHT_MS = 2500;
 
 interface CodexTimelineProps {
   detail: AgentSessionDetail;
   filter: CodexTimelineFilter;
   /** Stick to the newest entry while it keeps arriving */
   followLive: boolean;
+  /** This session's spawned-child relations */
+  childRelations: readonly AgentSessionRelation[];
+  onOpenRelated: (relation: AgentSessionRelation) => void;
+  /** Execution to bring into view once it is rendered */
+  focusExecutionId: string | null;
+  onFocusHandled: () => void;
 }
 
 function renderEntry(entry: TimelineEntry): React.JSX.Element {
@@ -50,67 +62,139 @@ export const CodexTimeline = ({
   detail,
   filter,
   followLive,
+  childRelations,
+  onOpenRelated,
+  focusExecutionId,
+  onFocusHandled,
 }: CodexTimelineProps): React.JSX.Element => {
   const entries = useMemo(() => filterTimeline(detail.timeline, filter), [detail.timeline, filter]);
   const turnStates = useMemo(() => turnStatesById(detail.runtime), [detail.runtime]);
+  const relations = useMemo(
+    () => ({
+      childrenByExecutionId: new Map(
+        childRelations.flatMap((relation): [string, AgentSessionRelation][] =>
+          relation.executionId ? [[relation.executionId, relation]] : []
+        )
+      ),
+      openRelated: onOpenRelated,
+    }),
+    [childRelations, onOpenRelated]
+  );
   const { scrollContainerRef } = useAutoScrollBottom([entries.length, detail.fingerprint], {
     threshold: 150,
     enabled: followLive,
     autoBehavior: 'auto',
     resetKey: `${detail.session.id}:${filter}`,
   });
+  // A focus request stays pending until its execution is shown (a live rollout
+  // may not have it yet); the next selection replaces it.
+  const focusShown =
+    focusExecutionId !== null &&
+    entries.some((entry) => entry.kind === 'execution' && entry.execution.id === focusExecutionId);
+  const highlight = useRef<{ element: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(
+    null
+  );
+
+  useEffect(() => {
+    if (!focusExecutionId || !focusShown) {
+      return;
+    }
+    const target = Array.from(
+      scrollContainerRef.current?.querySelectorAll<HTMLElement>('[data-execution-id]') ?? []
+    ).find((element) => element.dataset.executionId === focusExecutionId);
+    if (!target) {
+      return;
+    }
+    target.scrollIntoView({ block: 'center' });
+    if (highlight.current) {
+      clearTimeout(highlight.current.timer);
+      highlight.current.element.style.boxShadow = '';
+    }
+    target.style.boxShadow = '0 0 0 2px var(--highlight-ring)';
+    highlight.current = {
+      element: target,
+      timer: setTimeout(() => {
+        target.style.boxShadow = '';
+        highlight.current = null;
+      }, FOCUS_HIGHLIGHT_MS),
+    };
+    onFocusHandled();
+  }, [focusExecutionId, focusShown, onFocusHandled, scrollContainerRef]);
+
+  useEffect(
+    () => (): void => {
+      if (highlight.current) clearTimeout(highlight.current.timer);
+    },
+    []
+  );
 
   return (
     <TurnRuntimeContext.Provider value={turnStates}>
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-5xl space-y-2 p-4">
-          {detail.warnings.map((warning) => (
-            <div
-              key={warning}
-              className="flex items-center gap-2 rounded-md px-3 py-1.5 text-xs"
-              style={{
-                backgroundColor: 'var(--warning-bg)',
-                border: '1px solid var(--warning-border)',
-                color: 'var(--warning-text)',
-              }}
-            >
-              <TriangleAlert className="size-3.5 shrink-0" />
-              {warning}
-            </div>
-          ))}
-
-          {entries.length === 0 && (
-            <div className="py-12 text-center text-sm" style={{ color: COLOR_TEXT_MUTED }}>
-              {filter === 'all'
-                ? 'Nothing recorded in this rollout yet.'
-                : filter === 'executions'
-                  ? 'No tool calls or commands recorded yet.'
-                  : 'No failed, declined or interrupted executions.'}
-            </div>
-          )}
-
-          {entries.map((entry) => (
-            <div
-              key={entry.id}
-              className="flex gap-3"
-              style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 48px' }}
-            >
+      <CodexRelationsContext.Provider value={relations}>
+        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-5xl space-y-2 p-4">
+            {focusExecutionId && !focusShown && (
               <div
-                className="w-16 shrink-0 pt-2 text-right font-mono text-[11px] tabular-nums"
-                style={{ color: COLOR_TEXT_MUTED }}
-                title={
-                  entry.timestamp
-                    ? `${entry.timestamp} · line ${entry.lineNumber}`
-                    : `line ${entry.lineNumber}`
-                }
+                className="flex items-center gap-2 rounded-md px-3 py-1.5 text-xs"
+                style={{
+                  backgroundColor: 'var(--warning-bg)',
+                  border: '1px solid var(--warning-border)',
+                  color: 'var(--warning-text)',
+                }}
               >
-                {formatClockTime(entry.timestamp)}
+                <TriangleAlert className="size-3.5 shrink-0" />
+                The spawn call {focusExecutionId} is not shown in this timeline.
               </div>
-              <div className="min-w-0 flex-1">{renderEntry(entry)}</div>
-            </div>
-          ))}
+            )}
+            {detail.warnings.map((warning) => (
+              <div
+                key={warning}
+                className="flex items-center gap-2 rounded-md px-3 py-1.5 text-xs"
+                style={{
+                  backgroundColor: 'var(--warning-bg)',
+                  border: '1px solid var(--warning-border)',
+                  color: 'var(--warning-text)',
+                }}
+              >
+                <TriangleAlert className="size-3.5 shrink-0" />
+                {warning}
+              </div>
+            ))}
+
+            {entries.length === 0 && (
+              <div className="py-12 text-center text-sm" style={{ color: COLOR_TEXT_MUTED }}>
+                {filter === 'all'
+                  ? 'Nothing recorded in this rollout yet.'
+                  : filter === 'executions'
+                    ? 'No tool calls or commands recorded yet.'
+                    : 'No failed, declined or interrupted executions.'}
+              </div>
+            )}
+
+            {entries.map((entry) => (
+              <div
+                key={entry.id}
+                className="flex gap-3 rounded-md transition-shadow"
+                style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 48px' }}
+                data-execution-id={entry.kind === 'execution' ? entry.execution.id : undefined}
+              >
+                <div
+                  className="w-16 shrink-0 pt-2 text-right font-mono text-[11px] tabular-nums"
+                  style={{ color: COLOR_TEXT_MUTED }}
+                  title={
+                    entry.timestamp
+                      ? `${entry.timestamp} · line ${entry.lineNumber}`
+                      : `line ${entry.lineNumber}`
+                  }
+                >
+                  {formatClockTime(entry.timestamp)}
+                </div>
+                <div className="min-w-0 flex-1">{renderEntry(entry)}</div>
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      </CodexRelationsContext.Provider>
     </TurnRuntimeContext.Provider>
   );
 };

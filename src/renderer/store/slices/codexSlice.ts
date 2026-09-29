@@ -5,6 +5,9 @@
  *  - the rollout listing ($CODEX_HOME/sessions), grouped by working directory
  *  - the selected session and whether selection follows the live rollout
  *  - the selected session's normalized detail (timeline + stats)
+ *  - the selected session's relations to the sessions it spawned and the
+ *    session that spawned it (resolved in the main process; the renderer
+ *    only navigates by viewer session id)
  *
  * Detail refreshes pass the last fingerprint so unchanged rollouts cost one
  * stat() in the main process and no re-render here.
@@ -13,7 +16,12 @@
 import { api } from '@renderer/api';
 
 import type { AppState } from '../types';
-import type { AgentSessionDetail, AgentSessionList } from '@shared/types';
+import type {
+  AgentSessionDetail,
+  AgentSessionList,
+  AgentSessionRelation,
+  AgentSessionRelations,
+} from '@shared/types';
 import type { StateCreator } from 'zustand';
 
 export interface CodexSlice {
@@ -26,23 +34,57 @@ export interface CodexSlice {
   codexDetail: AgentSessionDetail | null;
   codexDetailLoading: boolean;
   codexDetailError: string | null;
+  /** Spawned-child and spawned-by relations of the selected session */
+  codexRelations: AgentSessionRelations | null;
+  /** Execution to bring into view once the selected session's timeline shows it */
+  codexFocusExecutionId: string | null;
 
   openCodexTab: () => void;
   fetchCodexSessions: () => Promise<void>;
-  /** Select a session; a manual pick stops following unless it is the live session */
-  selectCodexSession: (sessionId: string, options?: { manual?: boolean }) => void;
+  /**
+   * Select a session; a manual pick stops following unless it is the live
+   * session. `focusExecutionId` asks the timeline to bring that execution into
+   * view (and stops following).
+   */
+  selectCodexSession: (
+    sessionId: string,
+    options?: { manual?: boolean; focusExecutionId?: string }
+  ) => void;
   setCodexFollowLive: (follow: boolean) => void;
   refreshCodexDetail: () => Promise<void>;
+  refreshCodexRelations: () => Promise<void>;
+  /** Open the session a resolved relation points to; does nothing for any other status */
+  openCodexRelatedSession: (relation: AgentSessionRelation) => void;
+  clearCodexFocusExecution: () => void;
 }
 
 /** Guards against out-of-order detail responses when the selection changes quickly. */
 let detailRequestSeq = 0;
+/** Same for relation responses. */
+let relationsRequestSeq = 0;
 
 /**
  * The session to follow: the live rollout, else the most recently written one.
  */
 export function getCodexFollowTarget(list: AgentSessionList | null): string | null {
   return list?.liveSessionId ?? list?.latestSessionId ?? null;
+}
+
+/**
+ * Where a relation navigates: the related session's viewer id, and for a
+ * parent the spawn execution to bring into view. Only resolved relations
+ * navigate; missing, ambiguous and unresolved ones have no target.
+ */
+export function getCodexRelationTarget(
+  relation: AgentSessionRelation
+): { sessionId: string; focusExecutionId?: string } | null {
+  if (relation.status !== 'resolved' || !relation.relatedSessionId) {
+    return null;
+  }
+  return {
+    sessionId: relation.relatedSessionId,
+    focusExecutionId: relation.kind === 'spawned_by' ? relation.executionId : undefined,
+  };
 }
 
 export const createCodexSlice: StateCreator<AppState, [], [], CodexSlice> = (set, get) => ({
@@ -54,6 +96,8 @@ export const createCodexSlice: StateCreator<AppState, [], [], CodexSlice> = (set
   codexDetail: null,
   codexDetailLoading: false,
   codexDetailError: null,
+  codexRelations: null,
+  codexFocusExecutionId: null,
 
   openCodexTab: (): void => {
     const state = get();
@@ -82,9 +126,12 @@ export const createCodexSlice: StateCreator<AppState, [], [], CodexSlice> = (set
 
       const state = get();
       const target = getCodexFollowTarget(list);
+      const selectedId = state.codexSelectedSessionId;
       const selectedStillExists =
-        state.codexSelectedSessionId !== null &&
-        list.sessions.some((session) => session.id === state.codexSelectedSessionId);
+        selectedId !== null &&
+        (list.sessions.some((session) => session.id === selectedId) ||
+          // A session opened through a relation can be older than the listing's cap.
+          (state.codexDetail?.session.id === selectedId && state.codexDetailError === null));
 
       if ((state.codexFollowLive || !selectedStillExists) && target) {
         if (target !== state.codexSelectedSessionId) {
@@ -102,13 +149,24 @@ export const createCodexSlice: StateCreator<AppState, [], [], CodexSlice> = (set
     }
   },
 
-  selectCodexSession: (sessionId: string, options?: { manual?: boolean }): void => {
+  selectCodexSession: (
+    sessionId: string,
+    options?: { manual?: boolean; focusExecutionId?: string }
+  ): void => {
     const state = get();
-    const followLive = options?.manual
-      ? sessionId === getCodexFollowTarget(state.codexSessions)
-      : state.codexFollowLive;
+    const focusExecutionId = options?.focusExecutionId ?? null;
+    let followLive = state.codexFollowLive;
+    if (focusExecutionId) {
+      // Following would scroll away from the execution to focus.
+      followLive = false;
+    } else if (options?.manual) {
+      followLive = sessionId === getCodexFollowTarget(state.codexSessions);
+    }
     if (sessionId === state.codexSelectedSessionId) {
-      set({ codexFollowLive: followLive });
+      set({
+        codexFollowLive: followLive,
+        ...(focusExecutionId ? { codexFocusExecutionId: focusExecutionId } : {}),
+      });
       return;
     }
     set({
@@ -117,8 +175,13 @@ export const createCodexSlice: StateCreator<AppState, [], [], CodexSlice> = (set
       codexDetail: null,
       codexDetailError: null,
       codexDetailLoading: true,
+      codexRelations: null,
+      codexFocusExecutionId: focusExecutionId,
     });
-    void get().refreshCodexDetail();
+    // Relations after the detail: the main process then reuses the parsed records.
+    void get()
+      .refreshCodexDetail()
+      .then(() => get().refreshCodexRelations());
   },
 
   setCodexFollowLive: (follow: boolean): void => {
@@ -162,5 +225,42 @@ export const createCodexSlice: StateCreator<AppState, [], [], CodexSlice> = (set
         codexDetailError: error instanceof Error ? error.message : 'Failed to load session',
       });
     }
+  },
+
+  refreshCodexRelations: async (): Promise<void> => {
+    const sessionId = get().codexSelectedSessionId;
+    if (!sessionId) {
+      return;
+    }
+    const requestId = ++relationsRequestSeq;
+    let relations: AgentSessionRelations | null;
+    try {
+      relations = (await api.codex.getSessionRelations(sessionId)) ?? null;
+    } catch {
+      // No relations rather than stale navigation targets.
+      relations = null;
+    }
+    if (requestId !== relationsRequestSeq || get().codexSelectedSessionId !== sessionId) {
+      return;
+    }
+    // Relations are refreshed on every rollout change; skip identical results.
+    if (JSON.stringify(relations) !== JSON.stringify(get().codexRelations)) {
+      set({ codexRelations: relations });
+    }
+  },
+
+  openCodexRelatedSession: (relation: AgentSessionRelation): void => {
+    const target = getCodexRelationTarget(relation);
+    if (!target) {
+      return;
+    }
+    get().selectCodexSession(target.sessionId, {
+      manual: true,
+      focusExecutionId: target.focusExecutionId,
+    });
+  },
+
+  clearCodexFocusExecution: (): void => {
+    set({ codexFocusExecutionId: null });
   },
 });

@@ -1,7 +1,7 @@
 /**
- * CodexSessionHeader - What this session is, where it ran, the runtime
- * settings of its latest turn, and how its executions went; plus the timeline
- * filter.
+ * CodexSessionHeader - What this session is, where it ran, which session
+ * spawned it, the runtime settings of its latest turn, and how its executions
+ * went; plus the timeline filter.
  */
 
 import { CopyablePath } from '@renderer/components/common/CopyablePath';
@@ -18,16 +18,20 @@ import { formatTokensCompact } from '@renderer/utils/formatters';
 import { FolderOpen } from 'lucide-react';
 
 import { commandActionCounts, formatRelativeTime } from './codexFormatting';
+import { CodexParentSessionLink } from './CodexParentSessionLink';
 import { currentRuntime } from './codexRuntimeFormatting';
 import { CodexRuntimeSummary } from './CodexRuntimeSummary';
 
 import type { CodexTimelineFilter } from './codexFormatting';
-import type { AgentSessionDetail } from '@shared/types';
+import type { AgentSessionDetail, AgentSessionRelation } from '@shared/types';
 
 interface CodexSessionHeaderProps {
   detail: AgentSessionDetail;
   filter: CodexTimelineFilter;
   onFilterChange: (filter: CodexTimelineFilter) => void;
+  /** How this session was spawned, for subagent sessions */
+  parentRelation?: AgentSessionRelation;
+  onOpenRelated: (relation: AgentSessionRelation) => void;
 }
 
 const FILTERS: { id: CodexTimelineFilter; label: string }[] = [
@@ -56,6 +60,8 @@ export const CodexSessionHeader = ({
   detail,
   filter,
   onFilterChange,
+  parentRelation,
+  onOpenRelated,
 }: CodexSessionHeaderProps): React.JSX.Element => {
   const { session, stats, tokenUsage } = detail;
   const problems = stats.failed + stats.declined + stats.interrupted;
@@ -131,6 +137,9 @@ export const CodexSessionHeader = ({
               updated {formatRelativeTime(session.updatedAt)}
             </span>
           </div>
+          {parentRelation && (
+            <CodexParentSessionLink relation={parentRelation} onOpen={onOpenRelated} />
+          )}
           {runtime && <CodexRuntimeSummary current={runtime} />}
         </div>
       </div>
