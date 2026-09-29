@@ -360,3 +360,55 @@ describe('execution provenance: labels', () => {
     expect(markup).toContain('content');
   });
 });
+
+describe('execution details: files written', () => {
+  function commandWithFileChange(status: string): Execution {
+    line = 0;
+    const records = [
+      record('session_meta', { id: 'thread', cwd: '/work/app' }),
+      record('event_msg', { type: 'task_started', turn_id: TURN }),
+      record('response_item', {
+        type: 'function_call',
+        name: 'exec_command',
+        arguments: JSON.stringify({ cmd: 'apply_patch <<EOF ... EOF' }),
+        call_id: 'call_cmd',
+      }),
+      record('event_msg', {
+        type: 'item_completed',
+        thread_id: 'thread',
+        turn_id: TURN,
+        item: {
+          type: 'FileChange',
+          id: 'call_cmd',
+          status,
+          changes: { 'src/a.ts': { type: 'update', unified_diff: '@@' } },
+        },
+      }),
+      record('response_item', {
+        type: 'function_call_output',
+        call_id: 'call_cmd',
+        output: 'Process exited with code 0\nOutput:\n',
+      }),
+    ];
+    return find(normalizeCodexRollout(records, { active: false }).executions, 'call_cmd');
+  }
+
+  it('shows the files Codex recorded for a command, and the record behind them', () => {
+    const exec = commandWithFileChange('completed');
+    const text = html(exec);
+    expect(text).toContain('Files written');
+    expect(text).toContain('Codex recorded a file change for this execution');
+    expect(rows(exec)).toMatchObject({
+      'File change record / Record type': 'item_completed/FileChange',
+      'File change record / Rollout line': '4',
+      'Result record / Record type': 'function_call_output',
+    });
+  });
+
+  it('does not call the files of a failed file change written', () => {
+    const text = html(commandWithFileChange('failed'));
+    expect(text).toContain('Patch files');
+    expect(text).toContain('Not recorded as written (failed)');
+    expect(text).not.toContain('Files written');
+  });
+});

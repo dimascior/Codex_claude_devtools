@@ -51,6 +51,7 @@ import {
 } from '../src/main/providers/codex/CodexRolloutParser';
 import { CodexScanner, type RolloutFile } from '../src/main/providers/codex/CodexScanner';
 import { outputBodyToText, parseToolOutput } from '../src/main/providers/codex/execOutput';
+import { hasAppliedFileWrites } from '../src/shared/utils/executionEvidence';
 
 import { RolloutStateSurvey } from './codex-rollout-state';
 
@@ -967,6 +968,25 @@ function surveyEntry(entry: TimelineEntry, where: Where, survey: Survey): void {
   }
 }
 
+/**
+ * Where an execution's file list comes from and whether it counts as written:
+ * which kind of execution carries it, a file-change record or only the
+ * patch's own headers, and the recorded outcome.
+ */
+function fileWritesClass(exec: Execution, parent: Execution | undefined): string {
+  const kind = exec.kind === 'patch' ? 'patch' : `${exec.kind} (${exec.name})`;
+  const source = exec.fileChangeStatus !== undefined ? 'file-change record' : 'patch headers only';
+  let outcome: string;
+  if (!exec.fileWrites || exec.fileWrites.length === 0) {
+    outcome = 'no files listed';
+  } else if (hasAppliedFileWrites(exec)) {
+    outcome = 'counted';
+  } else {
+    outcome = `not counted: ${exec.fileChangeStatus ?? exec.status}`;
+  }
+  return `${parent ? 'nested ' : ''}${kind} · ${source} · ${outcome}`;
+}
+
 function surveyExecution(
   exec: Execution,
   parent: Execution | undefined,
@@ -1010,6 +1030,9 @@ function surveyExecution(
     survey
       .t('evidence')
       .add(`${parent ? 'nested' : 'top-level'} ${exec.kind}: ${evidenceClass(exec)}`, where);
+  }
+  if (exec.fileWrites !== undefined || exec.fileChangeStatus !== undefined) {
+    survey.t('fileWrites').add(fileWritesClass(exec, parent), where);
   }
   if (detail.startsWith('Process was still running when the log ended')) {
     anomalies.add('process never seen exiting', where);
@@ -1332,6 +1355,11 @@ function renderReport(input: ReportInput): string {
   out.push(
     ...tallyTable(t('evidence'), 'Evidence behind nested and unlinked executions', {
       examples: 'flagged',
+    })
+  );
+  out.push(
+    ...tallyTable(t('fileWrites'), 'File lists (files written): by execution, source and outcome', {
+      examples: 'all',
     })
   );
   out.push(...tallyTable(t('timeline'), 'Other timeline entries'));

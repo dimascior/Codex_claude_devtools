@@ -127,6 +127,13 @@ export interface ExecutionEvidence {
   cellLink?: EvidenceLink;
   /** How a recorded item was matched to a call site (script or inventory entry) */
   callSiteLink?: EvidenceLink;
+  /**
+   * The file-change record (`FileChange` item or `patch_apply_end` event) Codex
+   * wrote under the id of an execution that is not itself a patch, such as a
+   * shell call that ran one. It evidences `fileWrites` and `fileChangeStatus`,
+   * not the execution's own outcome.
+   */
+  fileChange?: RecordEvidence;
 }
 
 /**
@@ -230,8 +237,19 @@ export interface Execution {
   children?: Execution[];
   /** Whether the provider certified its recorded call inventory as complete */
   childrenComplete?: boolean;
-  /** Files a patch execution writes */
+  /**
+   * Files the execution writes: a patch's own file headers, or the file change
+   * Codex recorded for it (see `fileChangeStatus`). Never derived from command
+   * text.
+   */
   fileWrites?: FileWrite[];
+  /**
+   * Outcome of the file change Codex recorded for this execution (a
+   * `FileChange` item or `patch_apply_end` event), whatever the execution's
+   * kind. Kept apart from `status`, the execution's own outcome: a command can
+   * fail after the patch it ran was applied.
+   */
+  fileChangeStatus?: ExecutionStatus;
   /** The provider's own classification of a command, when it recorded one */
   commandActions?: CommandAction[];
   /** What is actually known about this execution, and from which records */
@@ -259,7 +277,10 @@ export interface ExecutionStats {
   declined: number;
   interrupted: number;
   byKind: Partial<Record<ExecutionKind, number>>;
-  /** Distinct files written by completed patch executions */
+  /**
+   * Distinct files Codex recorded as written: by completed patches and by
+   * applied file-change records of any execution (`hasAppliedFileWrites`)
+   */
   filesWritten: number;
   /** Provider-recorded command actions by type (`unknown` excluded) */
   commandActions: Partial<Record<string, number>>;

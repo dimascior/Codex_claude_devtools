@@ -691,6 +691,7 @@ export class CodexExecutionParser {
         exec.cwd = context.cwd;
         exec.fileWrites = item.writes;
         exec.status = mapPatchStatus(item.status);
+        exec.fileChangeStatus = exec.status;
         this.setItemOutput(exec, joinText(item.stdout, item.stderr));
         break;
       case 'mcp':
@@ -733,6 +734,16 @@ export class CodexExecutionParser {
     evidence: RecordEvidence,
     record: CodexRolloutRecord
   ): void {
+    if (item.type === 'file_change' && draft.kind !== 'patch') {
+      // A patch run by another kind of call (e.g. a shell call): the record
+      // describes the file change, not the call's own outcome.
+      draft.evidence.fileChange = evidence;
+      draft.fileChangeStatus = mapPatchStatus(item.status);
+      if (!draft.fileWrites || draft.fileWrites.length === 0) {
+        draft.fileWrites = item.writes;
+      }
+      return;
+    }
     draft.evidence.observed ??= evidence;
     draft.evidence.result = evidence;
     switch (item.type) {
@@ -756,6 +767,7 @@ export class CodexExecutionParser {
       }
       case 'file_change': {
         const status = mapPatchStatus(item.status);
+        draft.fileChangeStatus = status;
         if (status !== 'completed' || draft.status === 'running' || draft.status === 'unknown') {
           draft.status = status;
         }

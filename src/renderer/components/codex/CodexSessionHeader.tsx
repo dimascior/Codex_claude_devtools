@@ -159,7 +159,7 @@ export const CodexSessionHeader = ({
           )}
         </span>
         {stats.filesWritten > 0 && (
-          <span title="Distinct files added, updated, moved or deleted by completed patches (apply_patch calls and Codex file-change records)">
+          <span title="Distinct files Codex recorded as added, updated, moved or deleted: completed patches and applied file-change records (FileChange, patch_apply_end), whatever execution they belong to. Files that shell commands write are not recorded by Codex and not counted.">
             <span style={{ color: COLOR_TEXT }}>{stats.filesWritten}</span>{' '}
             {stats.filesWritten === 1 ? 'file' : 'files'} written
           </span>

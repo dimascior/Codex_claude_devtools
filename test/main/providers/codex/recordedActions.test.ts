@@ -270,3 +270,162 @@ describe('file writes', () => {
     expect(normalize(records).stats.filesWritten).toBe(2);
   });
 });
+
+describe('files written: recorded evidence only, whatever the execution kind', () => {
+  function execCommand(callId: string, cmd: string): CodexRolloutRecord {
+    return record('response_item', {
+      type: 'function_call',
+      name: 'exec_command',
+      arguments: JSON.stringify({ cmd }),
+      call_id: callId,
+    });
+  }
+
+  function output(callId: string, exitCode: number): CodexRolloutRecord {
+    return record('response_item', {
+      type: 'function_call_output',
+      call_id: callId,
+      output: `Process exited with code ${exitCode}\nOutput:\n`,
+    });
+  }
+
+  it('counts a completed patch execution with its recorded writes', () => {
+    const records = [
+      ...start(),
+      completedItem({
+        type: 'FileChange',
+        id: 'exec-p',
+        status: 'completed',
+        changes: { 'src/a.ts': { type: 'update', unified_diff: '@@' } },
+      }),
+    ];
+    const session = normalize(records);
+    expect(byId(session.executions, 'exec-p')).toMatchObject({
+      kind: 'patch',
+      status: 'completed',
+      fileChangeStatus: 'completed',
+    });
+    expect(session.stats.filesWritten).toBe(1);
+  });
+
+  it('counts the file change Codex recorded for a command, which stays a command', () => {
+    const records = [
+      ...start(),
+      execCommand('call_cmd', "apply_patch <<'EOF'\n...\nEOF && npm test"),
+      // The harness recorded the patch the command ran under the command's id.
+      completedItem({
+        type: 'FileChange',
+        id: 'call_cmd',
+        status: 'completed',
+        changes: {
+          'src/a.ts': { type: 'update', unified_diff: '@@' },
+          'src/b.ts': { type: 'delete', content: 'x' },
+        },
+      }),
+      // The command itself failed after the patch was applied.
+      output('call_cmd', 1),
+    ];
+    const session = normalize(records);
+    const exec = byId(session.executions, 'call_cmd');
+    expect(exec).toMatchObject({
+      kind: 'command',
+      status: 'failed',
+      exitCode: 1,
+      fileChangeStatus: 'completed',
+      fileWrites: [
+        { path: 'src/a.ts', change: 'update' },
+        { path: 'src/b.ts', change: 'delete' },
+      ],
+    });
+    // The record evidences the writes, not the command's own outcome.
+    expect(exec.evidence.fileChange).toMatchObject({
+      kind: 'item',
+      recordType: 'item_completed/FileChange',
+      recordId: 'call_cmd',
+    });
+    expect(exec.evidence.result).toMatchObject({ kind: 'output' });
+    expect(session.stats.filesWritten).toBe(2);
+  });
+
+  it('counts a legacy patch_apply_end recorded for a shell call', () => {
+    const records = [
+      ...start(),
+      record('response_item', {
+        type: 'function_call',
+        name: 'shell',
+        arguments: JSON.stringify({ command: ['bash', '-lc', 'apply_patch <<EOF\n...\nEOF'] }),
+        call_id: 'call_shell',
+      }),
+      record('event_msg', {
+        type: 'patch_apply_end',
+        call_id: 'call_shell',
+        turn_id: TURN,
+        success: true,
+        changes: { 'docs/x.md': { type: 'add', content: 'x' } },
+      }),
+    ];
+    const session = normalize(records);
+    expect(byId(session.executions, 'call_shell')).toMatchObject({
+      kind: 'command',
+      fileChangeStatus: 'completed',
+    });
+    expect(session.stats.filesWritten).toBe(1);
+  });
+
+  it('does not count a recorded file change that failed or was declined', () => {
+    const records = [
+      ...start(),
+      execCommand('call_bad', 'apply_patch <<EOF ... EOF'),
+      completedItem({
+        type: 'FileChange',
+        id: 'call_bad',
+        status: 'failed',
+        changes: { 'src/a.ts': { type: 'update', unified_diff: '@@' } },
+      }),
+      output('call_bad', 0),
+      completedItem({
+        type: 'FileChange',
+        id: 'exec-declined',
+        status: 'declined',
+        changes: { 'src/b.ts': { type: 'add', content: '' } },
+      }),
+    ];
+    const session = normalize(records);
+    expect(byId(session.executions, 'call_bad').fileChangeStatus).toBe('failed');
+    expect(byId(session.executions, 'exec-declined').fileChangeStatus).toBe('declined');
+    expect(session.stats.filesWritten).toBe(0);
+  });
+
+  it('never infers a write from command text', () => {
+    const records = [
+      ...start(),
+      execCommand('call_echo', 'echo foo > bar.txt && sed -i s/a/b/ c.txt && mv d e && rm f'),
+      output('call_echo', 0),
+    ];
+    const session = normalize(records);
+    const exec = byId(session.executions, 'call_echo');
+    expect(exec.status).toBe('completed');
+    expect(exec.fileWrites).toBeUndefined();
+    expect(exec.fileChangeStatus).toBeUndefined();
+    expect(session.stats.filesWritten).toBe(0);
+  });
+
+  it('does not count a patch found only in a cell script', () => {
+    const patch = '*** Begin Patch\n*** Add File: x.ts\n+1\n*** End Patch';
+    const records = [
+      ...start(),
+      record('response_item', {
+        type: 'custom_tool_call',
+        status: 'completed',
+        call_id: 'call_cell',
+        name: 'exec',
+        input: `await tools.apply_patch(${JSON.stringify(patch)});`,
+      }),
+    ];
+    const session = normalize(records);
+    const [child] = byId(session.executions, 'call_cell').children ?? [];
+    expect(child).toMatchObject({ kind: 'patch', status: 'unknown' });
+    expect(child.fileWrites).toEqual([{ path: 'x.ts', change: 'add' }]);
+    expect(session.stats.filesWritten).toBe(0);
+  });
+});

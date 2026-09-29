@@ -11,12 +11,14 @@ import { CodeBlockViewer } from '@renderer/components/chat/viewers/CodeBlockView
 import { CopyablePath } from '@renderer/components/common/CopyablePath';
 import { COLOR_TEXT, COLOR_TEXT_MUTED } from '@renderer/constants/cssVariables';
 import { formatDuration } from '@renderer/utils/formatters';
+import { hasAppliedFileWrites } from '@shared/utils/executionEvidence';
 
 import {
   commandActionLabel,
   commandActionTarget,
   describeFileWrite,
   durationSourceLabel,
+  fileWritesNote,
   generationLabel,
 } from './codexFormatting';
 import { CodexOutputBlock } from './CodexOutputBlock';
@@ -83,14 +85,18 @@ function buildFacts(exec: Execution): Fact[] {
     value: generation ? `${exec.source} (${generation})` : exec.source,
   });
   if (exec.fileWrites && exec.fileWrites.length > 0) {
+    const note = fileWritesNote(exec);
     facts.push({
-      label: 'Files written',
+      label: hasAppliedFileWrites(exec) ? 'Files written' : 'Patch files',
       value: (
-        <ul className="space-y-0.5 font-mono">
-          {exec.fileWrites.map((write) => (
-            <li key={write.path}>{describeFileWrite(write)}</li>
-          ))}
-        </ul>
+        <>
+          <ul className="space-y-0.5 font-mono">
+            {exec.fileWrites.map((write) => (
+              <li key={write.path}>{describeFileWrite(write)}</li>
+            ))}
+          </ul>
+          {note && <div style={{ color: COLOR_TEXT_MUTED }}>{note}</div>}
+        </>
       ),
     });
   }

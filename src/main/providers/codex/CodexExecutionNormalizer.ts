@@ -29,7 +29,11 @@
  * `thread_settings_applied`; see `CodexRuntimeStateBuilder`.
  */
 
-import { hasRecordedResult, isStaticOnly } from '@shared/utils/executionEvidence';
+import {
+  hasAppliedFileWrites,
+  hasRecordedResult,
+  isStaticOnly,
+} from '@shared/utils/executionEvidence';
 
 import { parseCodexEvent } from './CodexEventParser';
 import { CodexExecutionParser, type ExecutionContext } from './CodexExecutionParser';
@@ -509,7 +513,7 @@ function computeExecutionStats(executions: readonly Execution[]): ExecutionStats
     if (exec.status === 'running') stats.running++;
     if (exec.status === 'declined') stats.declined++;
     if (exec.status === 'interrupted') stats.interrupted++;
-    if (exec.kind === 'patch' && exec.status === 'completed') {
+    if (hasAppliedFileWrites(exec)) {
       for (const write of exec.fileWrites ?? []) written.add(write.movedTo ?? write.path);
     }
     for (const action of exec.commandActions ?? []) {

@@ -190,6 +190,15 @@ export function buildProvenance(exec: Execution): ProvenanceGroup[] {
     });
   }
 
+  if (exec.evidence.fileChange) {
+    groups.push({
+      title: 'File change record',
+      description:
+        "The file change Codex recorded under this execution's id. It evidences the files written, not the execution's own outcome.",
+      rows: recordRows(exec.evidence.fileChange),
+    });
+  }
+
   if (code) {
     const rows: ProvenanceRow[] = [];
     if (exec.parentId) rows.push({ label: 'Cell', value: exec.parentId, mono: true });

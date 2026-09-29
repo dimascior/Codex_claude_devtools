@@ -83,8 +83,14 @@ records, so most commands carry no tag, and the viewer never derives one from
 the command text. Entries Codex classified as `unknown` stay in the details
 without a tag. Patches are shown as file writes: each file with its change
 (added, updated, deleted, moved), from the patch's own headers or from the
-`changes` Codex recorded; the session's file count covers completed patches
-only.
+`changes` Codex recorded. A file counts as written only when Codex recorded the
+change as applied: a completed patch, or a completed `FileChange` /
+`patch_apply_end` record, whatever kind of execution it was recorded for. A
+shell call that ran a patch stays a command with its own outcome; the file
+change is shown with it (`fileChangeStatus`, and a "File change record" in
+its provenance). Nothing is inferred from command text: redirects, `sed -i`,
+`mv`, `rm`, formatters and MCP tools write files Codex does not record, so they
+are not counted.
 
 Examples from real rollouts: a command blocked by a PreToolUse hook is
 `declined` (it never ran, no exit code applies); a user abort is `interrupted`;

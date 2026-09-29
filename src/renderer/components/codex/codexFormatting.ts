@@ -2,7 +2,7 @@
  * Display helpers for the Codex execution timeline.
  */
 
-import { isStaticOnly } from '@shared/utils/executionEvidence';
+import { hasAppliedFileWrites, isStaticOnly } from '@shared/utils/executionEvidence';
 import {
   Ban,
   Braces,
@@ -107,6 +107,28 @@ export function statusLabel(exec: Execution): string {
       // A result record without a readable outcome is not the same as no record.
       return exec.evidence.result ? 'outcome unknown' : 'not recorded';
   }
+}
+
+const UNAPPLIED_WRITES: Record<ExecutionStatus, string> = {
+  completed: 'no file change recorded',
+  failed: 'failed',
+  declined: 'declined',
+  interrupted: 'interrupted',
+  running: 'in progress',
+  unknown: 'no result recorded',
+};
+
+/**
+ * How an execution's file list relates to what Codex recorded: nothing to add
+ * for a patch Codex recorded as applied; otherwise that the files come from a
+ * file change Codex recorded for this execution, or that they were not
+ * recorded as written, and why.
+ */
+export function fileWritesNote(exec: Execution): string | undefined {
+  if (hasAppliedFileWrites(exec)) {
+    return exec.kind === 'patch' ? undefined : 'Codex recorded a file change for this execution';
+  }
+  return `Not recorded as written (${UNAPPLIED_WRITES[exec.fileChangeStatus ?? exec.status]})`;
 }
 
 export const KIND_ICONS: Record<ExecutionKind, LucideIcon> = {
