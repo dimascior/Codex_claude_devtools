@@ -47,7 +47,8 @@ components/
 │   ├── CodexTimeline        # Chronological entries, auto-scroll while following live, TurnRuntimeContext + CodexRelationsContext providers, focus on a spawn call
 │   ├── CodexSettingsChangeItem # Settings change: recorded (solid) vs derived turn_context_diff (dashed), previous → next
 │   ├── CodexExecutionCard   # One execution (command, code cell, file write, tool); spawn cards show their child session
-│   ├── CodexExecutionDetails # Facts grid (incl. files written, Codex tags), provenance, session relation, effective runtime, argv, script, patch, args, output
+│   ├── CodexExecutionDetails # Facts grid (incl. files written, Codex tags), provenance, session relation, effective runtime, argv, script, patch or recorded changes, args, output
+│   ├── CodexRecordedDiffs   # Per-file change text of the file-change record (unified diff / file content), with omitted size
 │   ├── CodexChildSessionLink # Spawn card: child session + "Open child" (resolved relations only), else a status line
 │   ├── CodexParentSessionLink # Subagent header: "Spawned by" + "Open parent" (opens the parent at its spawn call), evidence toggle
 │   ├── CodexRelationDetails # Session relation evidence: explicit provider ID chain, spawn call, started record, threads, lines, candidates

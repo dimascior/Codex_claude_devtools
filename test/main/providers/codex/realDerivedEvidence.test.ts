@@ -319,34 +319,46 @@ describe('real-derived evidence: FileChange operations', () => {
     ]);
   });
 
-  it('records a FileChange add with the correct path and change type', () => {
+  // The record's change text is sanitized to `<string:N>` (N = its length); it is
+  // kept as the file's recorded change all the same.
+  it('records a FileChange add with the correct path, change type and content', () => {
     const exec = findExec('exec-346ded12-c538-4cf5-b204-7f912e225e30');
     expect(exec).toMatchObject({
       kind: 'patch',
       status: 'completed',
       lineNumber: 28,
     });
-    expect(exec.fileWrites).toEqual([{ path: '<path-1>', change: 'add' }]);
+    expect(exec.fileWrites).toEqual([
+      { path: '<path-1>', change: 'add', diff: { field: 'content', text: '<string:1108>' } },
+    ]);
   });
 
-  it('records a FileChange update with the correct path and change type', () => {
+  it('records a FileChange update with the correct path, change type and unified diff', () => {
     const exec = findExec('exec-645ede5b-0919-42ad-b9df-725f11495e7a');
     expect(exec).toMatchObject({
       kind: 'patch',
       status: 'completed',
       lineNumber: 36,
     });
-    expect(exec.fileWrites).toEqual([{ path: '<path-1>', change: 'update' }]);
+    expect(exec.fileWrites).toEqual([
+      {
+        path: '<path-1>',
+        change: 'update',
+        diff: { field: 'unified_diff', text: '<string:343>' },
+      },
+    ]);
   });
 
-  it('records a FileChange delete with the correct path and change type', () => {
+  it('records a FileChange delete with the correct path, change type and content', () => {
     const exec = findExec('exec-00c98b54-ddd2-4556-90b3-d18a510a239b');
     expect(exec).toMatchObject({
       kind: 'patch',
       status: 'completed',
       lineNumber: 908,
     });
-    expect(exec.fileWrites).toEqual([{ path: '<path-14>', change: 'delete' }]);
+    expect(exec.fileWrites).toEqual([
+      { path: '<path-14>', change: 'delete', diff: { field: 'content', text: '<string:1609>' } },
+    ]);
   });
 
   it('does not contain a move operation (absent from the 61-rollout corpus)', () => {

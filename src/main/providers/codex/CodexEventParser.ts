@@ -23,7 +23,13 @@ import type {
   AgentTokenUsageTotals,
   CommandAction,
   FileWrite,
+  RecordedFileDiff,
 } from '@main/domain';
+
+/** Recorded diff text kept per file of a file-change record */
+const MAX_FILE_DIFF_CHARS = 64 * 1024;
+/** Recorded diff text kept per file-change record, across its files */
+const MAX_RECORD_DIFF_CHARS = 256 * 1024;
 
 /**
  * An execution recorded by the harness. `id` is the item id: the call id for
@@ -413,20 +419,46 @@ function parseCommandActions(value: unknown): CommandAction[] | undefined {
 }
 
 /**
- * `changes` maps each path to `{type: 'add' | 'delete' | 'update', move_path?}`.
+ * `changes` maps each path to `{type: 'add' | 'delete' | 'update', move_path?}`
+ * with the change itself: `unified_diff` for an update, `content` for an added
+ * or deleted file. That text is kept up to a size per file and per record; the
+ * size of the rest is kept with it.
  */
 function parseFileWrites(changes: unknown): FileWrite[] {
   if (!isRecord(changes)) {
     return [];
   }
+  let budget = MAX_RECORD_DIFF_CHARS;
   return Object.entries(changes).map(([path, change]): FileWrite => {
-    const type = isRecord(change) ? change.type : undefined;
+    if (!isRecord(change)) {
+      return { path };
+    }
+    const type = change.type;
+    const diff = recordedDiff(change, Math.min(MAX_FILE_DIFF_CHARS, budget));
+    budget -= diff?.text.length ?? 0;
     return {
       path,
       change: type === 'add' || type === 'delete' || type === 'update' ? type : undefined,
-      movedTo: isRecord(change) ? str(change.move_path) : undefined,
+      movedTo: str(change.move_path),
+      diff,
     };
   });
+}
+
+function recordedDiff(change: Record<string, unknown>, max: number): RecordedFileDiff | undefined {
+  const field =
+    typeof change.unified_diff === 'string'
+      ? 'unified_diff'
+      : typeof change.content === 'string'
+        ? 'content'
+        : undefined;
+  if (!field) {
+    return undefined;
+  }
+  const text = change[field] as string;
+  return text.length > max
+    ? { field, text: text.slice(0, max), omittedChars: text.length - max }
+    : { field, text };
 }
 
 function joinStreams(record: Record<string, unknown>): string | undefined {

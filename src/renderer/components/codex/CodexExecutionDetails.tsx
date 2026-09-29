@@ -2,7 +2,8 @@
  * CodexExecutionDetails - Expanded body of an execution: exact command,
  * execution facts (cwd, exit code, timing, files written, Codex's own command
  * classification), provenance (ids, records, links), the session it spawned
- * (for spawn executions), the effective runtime of its turn, input, output.
+ * (for spawn executions), the effective runtime of its turn, input (or, without
+ * patch text of its own, the file changes Codex recorded), output.
  */
 
 import { useContext } from 'react';
@@ -24,6 +25,7 @@ import {
 import { CodexOutputBlock } from './CodexOutputBlock';
 import { CodexPatchView } from './CodexPatchView';
 import { CodexProvenance } from './CodexProvenance';
+import { CodexRecordedDiffs } from './CodexRecordedDiffs';
 import { CodexRelationDetails } from './CodexRelationDetails';
 import { CodexRelationsContext } from './codexRelationsContext';
 import { CodexRuntimeDetails } from './CodexRuntimeDetails';
@@ -185,7 +187,11 @@ export const CodexExecutionDetails = ({
           maxHeight="max-h-80"
         />
       )}
-      {patch !== undefined && <CodexPatchView patch={patch} />}
+      {patch !== undefined ? (
+        <CodexPatchView patch={patch} />
+      ) : (
+        <CodexRecordedDiffs execution={exec} />
+      )}
       {showArgs && (
         <CodexOutputBlock
           label="Arguments"

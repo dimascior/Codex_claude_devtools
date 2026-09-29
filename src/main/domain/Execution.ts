@@ -163,6 +163,19 @@ export interface CommandAction {
 }
 
 /**
+ * A file's change as the provider recorded it in its file-change record: the
+ * unified diff of an update, or the content of an added or deleted file.
+ */
+export interface RecordedFileDiff {
+  /** Record field the text comes from */
+  field: 'unified_diff' | 'content';
+  /** The recorded text, cut to the size kept per file and per record */
+  text: string;
+  /** Characters of the recorded text that were not kept */
+  omittedChars?: number;
+}
+
+/**
  * A file a patch execution writes. The change comes from the provider's record
  * of the applied patch, or from the patch's own file headers.
  */
@@ -171,6 +184,8 @@ export interface FileWrite {
   change?: 'add' | 'update' | 'delete';
   /** New path when an update also moved the file */
   movedTo?: string;
+  /** The change as the file-change record carries it; never from a patch's own text */
+  diff?: RecordedFileDiff;
 }
 
 export interface Execution {

@@ -1,5 +1,6 @@
 /**
- * CodexPatchView - Renders an apply_patch envelope with added/removed lines tinted.
+ * CodexPatchView - Renders an apply_patch envelope or a unified diff with
+ * added/removed lines tinted, or a whole added or deleted file in one tint.
  */
 
 import { CopyButton } from '@renderer/components/common/CopyButton';
@@ -18,11 +19,27 @@ import {
 /** Very long patches are cut for display (the copy button copies everything). */
 const MAX_LINES = 2000;
 
+/**
+ * `diff`: tint by line prefix. `added` / `removed` / `plain`: every line is
+ * file content, tinted as added, removed or not at all.
+ */
+export type PatchViewTone = 'diff' | 'added' | 'removed' | 'plain';
+
 interface CodexPatchViewProps {
   patch: string;
+  tone?: PatchViewTone;
 }
 
-function lineStyle(line: string): React.CSSProperties {
+function lineStyle(line: string, tone: PatchViewTone): React.CSSProperties {
+  if (tone === 'added') {
+    return { backgroundColor: DIFF_ADDED_BG, color: DIFF_ADDED_TEXT };
+  }
+  if (tone === 'removed') {
+    return { backgroundColor: DIFF_REMOVED_BG, color: DIFF_REMOVED_TEXT };
+  }
+  if (tone === 'plain') {
+    return { color: COLOR_TEXT_SECONDARY };
+  }
   if (line.startsWith('***')) {
     return { color: CODE_FILENAME };
   }
@@ -38,8 +55,12 @@ function lineStyle(line: string): React.CSSProperties {
   return { color: COLOR_TEXT_SECONDARY };
 }
 
-export const CodexPatchView = ({ patch }: CodexPatchViewProps): React.JSX.Element => {
-  const lines = patch.split('\n');
+export const CodexPatchView = ({
+  patch,
+  tone = 'diff',
+}: CodexPatchViewProps): React.JSX.Element => {
+  // A final newline ends the last line; it is not an empty line of its own.
+  const lines = (patch.endsWith('\n') ? patch.slice(0, -1) : patch).split('\n');
   const shown = lines.slice(0, MAX_LINES);
   return (
     <div
@@ -51,7 +72,11 @@ export const CodexPatchView = ({ patch }: CodexPatchViewProps): React.JSX.Elemen
         {shown.map((line, index) => (
           // Patch lines have no stable identity beyond their position.
 
-          <div key={index} className="whitespace-pre-wrap break-words px-3" style={lineStyle(line)}>
+          <div
+            key={index}
+            className="whitespace-pre-wrap break-words px-3"
+            style={lineStyle(line, tone)}
+          >
             {line || ' '}
           </div>
         ))}

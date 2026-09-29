@@ -31,6 +31,7 @@ import type {
   ExecutionKind,
   ExecutionStatus,
   FileWrite,
+  RecordedFileDiff,
   RecordEvidence,
   TimelineEntry,
 } from '@shared/types';
@@ -231,6 +232,23 @@ export function describeFileWrite(write: FileWrite): string {
     default:
       return write.path;
   }
+}
+
+/** What a recorded file change carries: "unified diff" or "file content" ("…: empty"). */
+export function recordedDiffLabel(diff: RecordedFileDiff): string {
+  const what = diff.field === 'unified_diff' ? 'unified diff' : 'file content';
+  return diff.text.length === 0 && !diff.omittedChars ? `${what}: empty` : what;
+}
+
+/** How much of a recorded file change was not loaded (size limit per file and per record). */
+export function omittedDiffNote(diff: RecordedFileDiff): string | undefined {
+  if (!diff.omittedChars) {
+    return undefined;
+  }
+  const size = `${diff.omittedChars.toLocaleString('en-US')} characters`;
+  return diff.text.length === 0
+    ? `${size} recorded, not loaded (size limit per record)`
+    : `… ${size} more recorded, not loaded (size limit)`;
 }
 
 /** "src/a.ts (added), src/b.ts" or "4 files: src/a.ts (added), src/b.ts, …". */

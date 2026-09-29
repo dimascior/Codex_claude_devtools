@@ -55,7 +55,7 @@ import { hasAppliedFileWrites } from '../src/shared/utils/executionEvidence';
 
 import { RolloutStateSurvey } from './codex-rollout-state';
 
-import type { AgentSessionList, Execution, TimelineEntry } from '../src/main/domain';
+import type { AgentSessionList, Execution, FileWrite, TimelineEntry } from '../src/main/domain';
 import type { CodexRolloutRecord } from '../src/main/providers/codex/types';
 import type { Readable } from 'stream';
 
@@ -987,6 +987,22 @@ function fileWritesClass(exec: Execution, parent: Execution | undefined): string
   return `${parent ? 'nested ' : ''}${kind} · ${source} · ${outcome}`;
 }
 
+/**
+ * One file of a file list: the record that listed it, the change type, and
+ * whether that record carried the change text (`unified_diff` or `content`)
+ * and whether it was cut to the size kept. Content-free.
+ */
+function fileDiffClass(exec: Execution, write: FileWrite, parent: Execution | undefined): string {
+  const record =
+    exec.fileChangeStatus === undefined
+      ? 'patch headers'
+      : ((exec.evidence.fileChange ?? exec.evidence.result)?.recordType ?? 'file-change record');
+  const text = write.diff
+    ? `${write.diff.field}${write.diff.omittedChars ? ' (cut)' : ''}`
+    : 'no change text';
+  return `${parent ? 'nested ' : ''}${record} · ${write.change ?? 'no type'} · ${text}`;
+}
+
 function surveyExecution(
   exec: Execution,
   parent: Execution | undefined,
@@ -1033,6 +1049,9 @@ function surveyExecution(
   }
   if (exec.fileWrites !== undefined || exec.fileChangeStatus !== undefined) {
     survey.t('fileWrites').add(fileWritesClass(exec, parent), where);
+  }
+  for (const write of exec.fileWrites ?? []) {
+    survey.t('fileDiffs').add(fileDiffClass(exec, write, parent), where);
   }
   if (detail.startsWith('Process was still running when the log ended')) {
     anomalies.add('process never seen exiting', where);
@@ -1361,6 +1380,13 @@ function renderReport(input: ReportInput): string {
     ...tallyTable(t('fileWrites'), 'File lists (files written): by execution, source and outcome', {
       examples: 'all',
     })
+  );
+  out.push(
+    ...tallyTable(
+      t('fileDiffs'),
+      'Files in file lists: by record, change type and recorded change text',
+      { examples: 'all' }
+    )
   );
   out.push(...tallyTable(t('timeline'), 'Other timeline entries'));
   out.push(...tallyTable(t('sessions'), 'Surveyed sessions'));

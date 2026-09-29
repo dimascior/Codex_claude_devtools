@@ -412,3 +412,74 @@ describe('execution details: files written', () => {
     expect(text).not.toContain('Files written');
   });
 });
+
+describe('execution details: recorded changes', () => {
+  const DIFF = '@@ -1,2 +1,2 @@\n-const a = 1;\n+const a = 2;\n const b = 3;';
+
+  function recordedPatch(status: string, changes: Record<string, unknown>): Execution {
+    line = 0;
+    const records = [
+      record('session_meta', { id: 'thread', cwd: '/work/app' }),
+      record('event_msg', { type: 'task_started', turn_id: TURN }),
+      record('event_msg', {
+        type: 'item_completed',
+        thread_id: 'thread',
+        turn_id: TURN,
+        item: { type: 'FileChange', id: LOOSE_ITEM, status, changes },
+      }),
+    ];
+    return find(normalizeCodexRollout(records, { active: false }).executions, LOOSE_ITEM);
+  }
+
+  it("shows each file's change as the file-change record carries it", () => {
+    const text = html(
+      recordedPatch('completed', {
+        'src/a.ts': { type: 'update', unified_diff: DIFF },
+        'docs/new.md': { type: 'add', content: '# New' },
+      })
+    );
+    expect(text).toContain('Recorded changes');
+    expect(text).toContain('as Codex recorded them: item_completed/FileChange, line 3');
+    expect(text).toContain('unified diff');
+    expect(text).toContain('+const a = 2;');
+    expect(text).toContain('-const a = 1;');
+    expect(text).toContain('docs/new.md (added)');
+    expect(text).toContain('file content');
+    expect(text).toContain('# New');
+    expect(text).not.toContain('Not recorded as written');
+  });
+
+  it('says when the change was not written, and how much was not loaded', () => {
+    const exec = recordedPatch('failed', { 'src/a.ts': { type: 'update', unified_diff: DIFF } });
+    const [write] = exec.fileWrites ?? [];
+    const cut: Execution = {
+      ...exec,
+      fileWrites: [{ ...write, diff: { field: 'unified_diff', text: DIFF, omittedChars: 1234 } }],
+    };
+    const text = html(cut);
+    // The recorded changes carry the outcome themselves, not only the facts grid.
+    const section = text.slice(text.indexOf('aria-label="Recorded changes"'));
+    expect(section).toContain('Recorded changes');
+    expect(section).toContain('Not recorded as written (failed)');
+    expect(section).toContain('… 1,234 characters more recorded, not loaded (size limit)');
+  });
+
+  it('shows nothing when the record carries no change text', () => {
+    const text = html(recordedPatch('completed', { 'src/a.ts': { type: 'update' } }));
+    expect(text).toContain('Files written');
+    expect(text).not.toContain('Recorded changes');
+  });
+
+  it('shows the patch of a call with patch text of its own, not recorded changes', () => {
+    expect(patch.input).toBeDefined();
+    const withDiff: Execution = {
+      ...patch,
+      fileWrites: [
+        { path: 'src/a.ts', change: 'update', diff: { field: 'unified_diff', text: DIFF } },
+      ],
+    };
+    const text = html(withDiff);
+    expect(text).not.toContain('Recorded changes');
+    expect(text).not.toContain('+const a = 2;');
+  });
+});

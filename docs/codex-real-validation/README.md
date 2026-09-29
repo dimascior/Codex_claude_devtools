@@ -263,6 +263,13 @@ Regression tests: `test/main/providers/codex/realDerivedEvidence.test.ts` (19
 assertions covering the spawn chain, continuation handling, and file-change
 operations). All new fixtures pass the sanitizer contract and privacy audit.
 
+The file-change records keep the change text in their `changes` values:
+`content` for add and delete, `unified_diff` (with `move_path`) for update, as
+`<string:N>` in the fixture. `pnpm exec tsx scripts/codex-rollout-survey.ts
+--all` reports in "Files in file lists", per record type and change type,
+whether the record carried that text (`unified_diff`, `content`, or none) and
+how often it was cut to the size the viewer keeps.
+
 ## Sanitizer contract (version 3)
 
 Each transcript line is `{"line": N, "bytes": B, ...record}` where `line` is the

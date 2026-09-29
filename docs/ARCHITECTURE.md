@@ -90,7 +90,14 @@ shell call that ran a patch stays a command with its own outcome; the file
 change is shown with it (`fileChangeStatus`, and a "File change record" in
 its provenance). Nothing is inferred from command text: redirects, `sed -i`,
 `mv`, `rm`, formatters and MCP tools write files Codex does not record, so they
-are not counted.
+are not counted. Each file of a file-change record keeps the change text Codex
+recorded with it (`FileWrite.diff`: the `unified_diff` of an update, the
+`content` of an added or deleted file, up to 64K characters per file and 256K
+per record, with the size of the rest), shown as "Recorded changes" in the
+details of executions that have no patch text of their own: patches run from a
+code cell, and shell calls that ran a patch. A script's `tools.apply_patch(...)`
+argument is static analysis of the cell, never the change shown for a recorded
+write.
 
 Examples from real rollouts: a command blocked by a PreToolUse hook is
 `declined` (it never ran, no exit code applies); a user abort is `interrupted`;

@@ -34,7 +34,7 @@ test/
 │   │   └── codex/       # Rollout parsing, normalization, output/command parsing, session service,
 │   │                    # realObserved (real fixtures), evidenceLinking (linking rules),
 │   │                    # CodexMetadataParser (UUIDv7 ids, inherited history, subagent task names),
-│   │                    # recordedActions (parsed_cmd tags, file writes),
+│   │                    # recordedActions (parsed_cmd tags, file writes, recorded change text),
 │   │                    # runtimeState (effective turn state, recorded/derived settings changes),
 │   │                    # spawnObservations (spawn call ↔ started item id chain, own history, line pre-filter),
 │   │                    # sessionRelations (parent ↔ child resolution, negative evidence, ambiguity,

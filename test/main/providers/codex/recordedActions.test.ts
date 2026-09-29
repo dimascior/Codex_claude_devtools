@@ -195,9 +195,14 @@ describe('file writes', () => {
     const exec = byId(normalize(records).executions, 'exec-patch');
     expect(exec.kind).toBe('patch');
     expect(exec.fileWrites).toEqual([
-      { path: 'src/new.ts', change: 'add' },
-      { path: 'src/old.ts', change: 'update', movedTo: 'src/renamed.ts' },
-      { path: 'src/gone.ts', change: 'delete' },
+      { path: 'src/new.ts', change: 'add', diff: { field: 'content', text: 'x' } },
+      {
+        path: 'src/old.ts',
+        change: 'update',
+        movedTo: 'src/renamed.ts',
+        diff: { field: 'unified_diff', text: '@@' },
+      },
+      { path: 'src/gone.ts', change: 'delete', diff: { field: 'content', text: 'y' } },
       { path: 'src/odd.ts' },
     ]);
   });
@@ -427,5 +432,184 @@ describe('files written: recorded evidence only, whatever the execution kind', (
     expect(child).toMatchObject({ kind: 'patch', status: 'unknown' });
     expect(child.fileWrites).toEqual([{ path: 'x.ts', change: 'add' }]);
     expect(session.stats.filesWritten).toBe(0);
+  });
+});
+
+describe('recorded diffs: the change Codex recorded for each file', () => {
+  const DIFF = '@@ -1,2 +1,2 @@\n-const a = 1;\n+const a = 2;\n const b = 3;\n';
+
+  it('keeps the diff of a nested patch Codex recorded while its cell ran', () => {
+    const records = [
+      ...start(),
+      record('response_item', {
+        type: 'custom_tool_call',
+        status: 'completed',
+        call_id: 'call_cell',
+        name: 'exec',
+        input: 'await tools.apply_patch(patch);',
+      }),
+      record('event_msg', {
+        type: 'patch_apply_end',
+        call_id: 'exec-5d0c9d52-6f55-4a8e-9d5c-2f4f1f9b8a10',
+        turn_id: TURN,
+        success: true,
+        stdout: 'Success. Updated the following files:\nM src/a.ts\n',
+        changes: { 'src/a.ts': { type: 'update', unified_diff: DIFF, move_path: null } },
+      }),
+      record('response_item', {
+        type: 'custom_tool_call_output',
+        call_id: 'call_cell',
+        output: [
+          { type: 'input_text', text: 'Script completed\nWall time: 1.0 seconds\nOutput:\n' },
+        ],
+      }),
+    ];
+    const children = byId(normalize(records).executions, 'call_cell').children ?? [];
+    const recorded = byId(children, 'exec-5d0c9d52-6f55-4a8e-9d5c-2f4f1f9b8a10');
+    expect(recorded).toMatchObject({ kind: 'patch', source: 'patch_apply_end' });
+    expect(recorded.fileWrites).toEqual([
+      { path: 'src/a.ts', change: 'update', diff: { field: 'unified_diff', text: DIFF } },
+    ]);
+    // The script's call site carries no recorded diff: its argument is not a record.
+    const callSite = children.find((child) => child.source === 'cell_script');
+    expect(callSite?.fileWrites?.some((write) => write.diff !== undefined) ?? false).toBe(false);
+  });
+
+  it('keeps the content Codex recorded for an added or deleted file', () => {
+    const records = [
+      ...start(),
+      completedItem({
+        type: 'FileChange',
+        id: 'exec-files',
+        status: 'completed',
+        changes: {
+          'docs/new.md': { type: 'add', content: '# New\n' },
+          'tmp/old.txt': { type: 'delete', content: 'old\n' },
+        },
+      }),
+    ];
+    expect(byId(normalize(records).executions, 'exec-files').fileWrites).toEqual([
+      { path: 'docs/new.md', change: 'add', diff: { field: 'content', text: '# New\n' } },
+      { path: 'tmp/old.txt', change: 'delete', diff: { field: 'content', text: 'old\n' } },
+    ]);
+  });
+
+  it('leaves the diff unknown when the record carries none', () => {
+    const records = [
+      ...start(),
+      completedItem({
+        type: 'FileChange',
+        id: 'exec-bare',
+        status: 'completed',
+        changes: { 'a.ts': { type: 'update' }, 'b.ts': { type: 'update', unified_diff: 42 } },
+      }),
+    ];
+    const writes = byId(normalize(records).executions, 'exec-bare').fileWrites ?? [];
+    expect(writes).toHaveLength(2);
+    expect(writes.map((write) => write.diff)).toEqual([undefined, undefined]);
+  });
+
+  it('keeps the recorded text up to a size per file and per record, with the size of the rest', () => {
+    // 64 KiB per file, 256 KiB per record (CodexEventParser).
+    const perFile = 64 * 1024;
+    const big = 'x'.repeat(perFile + 10);
+    const medium = 'y'.repeat(60_000);
+    const records = [
+      ...start(),
+      completedItem({
+        type: 'FileChange',
+        id: 'exec-big',
+        status: 'completed',
+        changes: { 'big.ts': { type: 'update', unified_diff: big } },
+      }),
+      completedItem({
+        type: 'FileChange',
+        id: 'exec-many',
+        status: 'completed',
+        changes: Object.fromEntries(
+          [1, 2, 3, 4, 5, 6].map((n) => [`f${n}.ts`, { type: 'add', content: medium }])
+        ),
+      }),
+    ];
+    const session = normalize(records);
+    const [bigWrite] = byId(session.executions, 'exec-big').fileWrites ?? [];
+    expect(bigWrite.diff).toEqual({
+      field: 'unified_diff',
+      text: big.slice(0, perFile),
+      omittedChars: 10,
+    });
+    const kept = (byId(session.executions, 'exec-many').fileWrites ?? []).map((write) => ({
+      kept: write.diff?.text.length,
+      omitted: write.diff?.omittedChars,
+    }));
+    const lastKept = 256 * 1024 - 4 * 60_000;
+    expect(kept).toEqual([
+      { kept: 60_000, omitted: undefined },
+      { kept: 60_000, omitted: undefined },
+      { kept: 60_000, omitted: undefined },
+      { kept: 60_000, omitted: undefined },
+      { kept: lastKept, omitted: 60_000 - lastKept },
+      { kept: 0, omitted: 60_000 },
+    ]);
+  });
+
+  it('keeps the diff of a file change Codex recorded for a command', () => {
+    const records = [
+      ...start(),
+      record('response_item', {
+        type: 'function_call',
+        name: 'exec_command',
+        arguments: JSON.stringify({ cmd: "apply_patch <<'EOF'\n...\nEOF" }),
+        call_id: 'call_cmd',
+      }),
+      completedItem({
+        type: 'FileChange',
+        id: 'call_cmd',
+        status: 'completed',
+        changes: { 'src/a.ts': { type: 'update', unified_diff: DIFF } },
+      }),
+    ];
+    const exec = byId(normalize(records).executions, 'call_cmd');
+    expect(exec.kind).toBe('command');
+    expect(exec.fileWrites).toEqual([
+      { path: 'src/a.ts', change: 'update', diff: { field: 'unified_diff', text: DIFF } },
+    ]);
+  });
+
+  it("never takes a diff from a patch's own text", () => {
+    const patch = '*** Begin Patch\n*** Update File: src/a.ts\n@@\n-a\n+b\n*** End Patch';
+    const records = [
+      ...start(),
+      record('response_item', {
+        type: 'custom_tool_call',
+        status: 'completed',
+        call_id: 'call_patch',
+        name: 'apply_patch',
+        input: patch,
+      }),
+      record('event_msg', {
+        type: 'patch_apply_end',
+        call_id: 'call_patch',
+        turn_id: TURN,
+        success: true,
+        changes: { '/work/app/src/a.ts': { type: 'update', unified_diff: DIFF } },
+      }),
+      record('response_item', {
+        type: 'custom_tool_call',
+        status: 'completed',
+        call_id: 'call_cell',
+        name: 'exec',
+        input: `await tools.apply_patch(${JSON.stringify(patch)});`,
+      }),
+    ];
+    const session = normalize(records);
+    // The call shows its own patch; its file list comes from the patch headers.
+    const call = byId(session.executions, 'call_patch');
+    expect(call.input).toBe(patch);
+    expect(call.fileWrites).toEqual([{ path: 'src/a.ts', change: 'update' }]);
+    // A script call site's argument is static analysis, not a recorded change.
+    const [callSite] = byId(session.executions, 'call_cell').children ?? [];
+    expect(callSite).toMatchObject({ source: 'cell_script', status: 'unknown' });
+    expect(callSite.fileWrites).toEqual([{ path: 'src/a.ts', change: 'update' }]);
   });
 });
