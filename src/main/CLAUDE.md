@@ -6,7 +6,7 @@ Node.js runtime handling file system, IPC, and app lifecycle.
 - `index.ts` - App entry point, lifecycle management
 - `ipc/` - IPC handlers organized by domain
 - `services/` - Business logic by domain
-- `domain/` - Provider-neutral session model (`Execution`, `TimelineEntry`, `AgentSession*`, runtime state in `RuntimeState.ts`), re-exported via `@shared/types`
+- `domain/` - Provider-neutral session model (`Execution`, `TimelineEntry`, `AgentSession*`, runtime state in `RuntimeState.ts`, session relations in `SessionRelation.ts`), re-exported via `@shared/types`
 - `providers/codex/` - Codex CLI rollout provider (scanner, parsers, normalizer, `CodexSessionService`)
 - `types/` - Type definitions
 - `utils/` - Utility functions
@@ -22,7 +22,7 @@ Handlers in `ipc/` by domain:
 - `utility.ts` - Shell & file operations
 - `config.ts` - Configuration
 - `notifications.ts` - Notifications
-- `codex.ts` - Codex rollout listing and session detail
+- `codex.ts` - Codex rollout listing, session detail and session relations
 
 ## Adding IPC Handler
 1. Add to domain file in `ipc/`
@@ -52,4 +52,6 @@ as `codex:session-change` (IPC) and SSE events (HTTP server).
 | `CodexRuntimeState.ts` | Effective settings per turn (first `turn_context`), recorded thread settings, `settings_change` entries (recorded vs `turn_context_diff`), same-turn mismatch warnings |
 | `CodexExecutionNormalizer.ts` | `normalizeCodexRollout()` → timeline, executions, stats, token usage, runtime state |
 | `CodexScanner.ts` | Rollout discovery, head metadata cache, live selection, project grouping |
-| `CodexSessionService.ts` | Entry point for IPC/HTTP: cached, incremental session detail |
+| `CodexSpawnObservations.ts` | Own-history `spawn_agent` calls joined by exact id to `SubAgentActivity` `started` items (child thread), byte-level line pre-filter |
+| `CodexSessionRelations.ts` | Parent → child and child → parent resolution to rollout files (`resolved` / `missing_session` / `ambiguous` / `unresolved`), incremental per-file cache |
+| `CodexSessionService.ts` | Entry point for IPC/HTTP: cached, incremental session detail and session relations |

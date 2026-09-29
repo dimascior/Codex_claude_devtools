@@ -23,7 +23,8 @@ pnpm test:task-filtering  # Task tool filtering
 ```
 test/
 ├── fixtures/
-│   └── codex/           # Synthetic Codex rollouts (function calls, code mode, paginated, legacy)
+│   └── codex/           # Synthetic Codex rollouts (function calls, code mode, paginated, legacy);
+│                        # subagentFamily.ts: labelled synthetic parent/child/grandchild/continuation rollouts
 ├── main/
 │   ├── http/            # Host policy (loopback bind, Host allowlist)
 │   ├── ipc/             # IPC handler tests
@@ -34,7 +35,10 @@ test/
 │   │                    # realObserved (real fixtures), evidenceLinking (linking rules),
 │   │                    # CodexMetadataParser (UUIDv7 ids, inherited history, subagent task names),
 │   │                    # recordedActions (parsed_cmd tags, file writes),
-│   │                    # runtimeState (effective turn state, recorded/derived settings changes)
+│   │                    # runtimeState (effective turn state, recorded/derived settings changes),
+│   │                    # spawnObservations (spawn call ↔ started item id chain, own history, line pre-filter),
+│   │                    # sessionRelations (parent ↔ child resolution, negative evidence, ambiguity,
+│   │                    # continuation files, live add/unlink, read cost)
 │   ├── services/        # Service tests
 │   │   ├── analysis/    (ChunkBuilder)
 │   │   ├── discovery/   (ProjectPathResolver, SessionSearcher)
@@ -47,7 +51,7 @@ test/
 │       ├── regexValidation.test.ts
 │       └── tokenizer.test.ts
 ├── renderer/
-│   ├── components/      # Component helpers (codexFormatting, codexProvenance, codexRuntime, renderOutput, markdownImages)
+│   ├── components/      # Component helpers (codexFormatting, codexProvenance, codexRuntime, codexRelations, renderOutput, markdownImages)
 │   ├── hooks/           # Hook tests
 │   │   ├── navigationUtils.test.ts
 │   │   ├── useAutoScrollBottom.test.ts

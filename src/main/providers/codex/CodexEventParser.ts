@@ -349,8 +349,10 @@ function parseCompletedItem(payload: Record<string, unknown>): CodexEvent {
       );
     }
     // Recognized and deliberately not rendered (see docs/codex-real-validation):
-    // ContextCompaction duplicates the `compacted` record; SubAgentActivity and
-    // CollabAgentToolCall describe multi-agent state whose links are unverified.
+    // ContextCompaction duplicates the `compacted` record; SubAgentActivity
+    // `started` items link a spawn call to its child rollout and are read by
+    // CodexSpawnObservations for session relations, not shown as entries; other
+    // SubAgentActivity kinds and CollabAgentToolCall carry no verified relation.
     default:
       return { kind: 'ignored', type: itemType || 'item_completed' };
   }

@@ -186,6 +186,71 @@ Exceptions the corpus shows:
 - A setting only one of two states records is not compared: coverage differs
   between producer versions.
 
+## Subagent sessions
+
+A Codex parent rollout and the subagent rollouts it spawned stay separate
+sessions with separate timelines; the viewer links them. A `spawn_agent`
+execution in the parent shows the child session it started, with an explicit
+**Open child** button; a subagent's header shows **Spawned by** with **Open
+parent**, which opens the parent rollout at the spawn call. Navigation uses the
+viewer's session id (one rollout file), never a thread id: one Codex thread can
+span several rollout files (a continuation is named
+`rollout-<timestamp>-<thread>_<suffix>.jsonl`).
+
+The only relation used is the id chain the committed full-corpus survey
+verified (22 of 22 spawns resolved to exactly one child rollout, all agreeing
+with the child's declared parent, no contradiction, cli 0.147.0-alpha.6.6,
+0.153.0 and 0.153.4; `docs/codex-real-validation/`):
+
+```
+parent: function_call spawn_agent (namespace collaboration)   call_id = X
+            │ same id
+            ▼
+parent: item_completed SubAgentActivity {kind: started}        id = X
+            │ agent_thread_id = T
+            ▼
+child:  session_meta.id = T
+```
+
+- **Parent → child** (`CodexSessionRelations`): each spawn call of the parent's
+  own history is joined to the `started` items carrying exactly its call id
+  (`CodexSpawnObservations`); their `agent_thread_id` names the child thread,
+  and the child is the one rollout file whose `session_meta.id` is that thread.
+- **Child → parent**: the child's declared parent thread (`parent_thread_id`,
+  else `source.subagent.thread_spawn.parent_thread_id`) only narrows the search
+  to that thread's rollout files. The parent is the one file whose own history
+  holds a spawn call whose `started` item names the child's thread; the
+  relation carries that file and the spawn call (the execution to focus).
+- **Not resolved means not guessed**: no rollout of the named thread →
+  `missing_session` (a live child whose file has not appeared yet, or a deleted
+  one); several files, or `started` items naming different threads for one
+  call → `ambiguous`, with the candidates listed and none chosen; a spawn call
+  no `started` item confirms, or no candidate proving the chain → `unresolved`.
+  Only `resolved` relations navigate.
+- **Never used as identity**: timestamps or nearness to the spawn, a child's
+  `session_id` (the root session, not the direct parent: wrong for a depth-2
+  child), its declared parent thread alone, `agent_path` or agent names,
+  working directories, the targets of other `SubAgentActivity` kinds
+  (`interacted`, `interrupted`, `completed` also name roots and siblings) and
+  `CollabAgentToolCall`. A fork's `forked_from_id` is not a spawn.
+- **Inherited history**: records copied from the parent into a subagent
+  rollout are skipped by the same `InheritedHistoryTracker` rules as the
+  timeline, so a subagent never appears to have spawned its siblings.
+- **Evidence**: a relation (`AgentSessionRelation`, `src/main/domain/SessionRelation.ts`)
+  records its method (`explicit_id_chain`), the spawn call and `started` record
+  with their rollout lines, and the thread ids. It is kept apart from execution
+  evidence (`Execution.evidence` is unchanged) and shown in the spawn card's
+  details and in the subagent header ("Evidence").
+- **Cost**: listing reads no spawn records. A relation request reads the
+  session's own spawn records (from the records its detail view already parsed,
+  else with a byte-level line pre-filter that parses only lines that can carry
+  them), stats the rollout files, and reads the heads of the files named for
+  the threads it looks up; a subagent also reads the spawn records of its
+  declared parent thread's files, and nothing else. Reads are incremental and
+  cached per file stat. Rollout files are found by the thread id in their name
+  (Codex names each rollout after its thread) or by a `session_meta` already
+  read, and each is confirmed by its `session_meta.id`.
+
 ## Live follow
 
 - `CodexSessionWatcher` watches `$CODEX_HOME/sessions` recursively (100 ms
@@ -202,6 +267,10 @@ Exceptions the corpus shows:
   events in standalone mode. A rollout modified in the last 10 minutes counts as
   live; the Codex view follows the most recently written live session until the
   user selects another one.
+- Subagent relations of the selected session are fetched after its detail and
+  refreshed (throttled) on every rollout change: a child whose rollout appears
+  becomes navigable, and a deleted one stops being a target. Watcher add/unlink
+  events refresh the relation layer's list of rollout files.
 
 ## Privacy expectations
 
@@ -245,6 +314,14 @@ trust boundary; remote serving has no authentication and is out of scope (see
 - Subagent rollouts migrated from the legacy format declare an inherited-history
   boundary equal to their record count; the viewer ends the inherited prefix at
   the first record of the subagent's own history instead.
+- Subagent relations are verified on the real corpus by the committed survey
+  (22/22), not by real-derived fixtures: the sanitized fixtures replace
+  `agent_thread_id` with `<string:36>`, so the join is regression-tested on a
+  labelled synthetic family (`test/fixtures/codex/subagentFamily.ts`).
+- Rollout files are located by the thread id in their name before their
+  `session_meta.id` confirms them. A rollout whose name did not carry its own
+  thread id, and whose head the listing never read, would not be found for a
+  relation (Codex always names rollouts after their thread).
 - `session_meta.cli_version` names the producer that created a rollout, not
   the one that wrote later records: resumed sessions can switch record types
   and fields mid-file (e.g. start writing `thread_settings_applied`). Runtime

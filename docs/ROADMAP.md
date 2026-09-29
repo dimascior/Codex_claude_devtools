@@ -50,8 +50,6 @@ incremental-vs-full parse equivalence tests unchanged.
 - **Remote access**: the HTTP server has no authentication and is local-only by
   default. Serving other machines safely needs an authentication mechanism
   (token or proxy-based), not only a bind address.
-- **Subagent navigation**: link a parent's `spawn_agent` execution to the child
-  session and back.
 - **Codex search and export**: text search within a Codex session and export of
   the normalized session, matching what the Claude view offers.
 - **Provider layout**: move the Claude reader behind `src/main/providers/claude/`

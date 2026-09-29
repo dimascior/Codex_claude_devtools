@@ -191,6 +191,43 @@ Tooling (not evidence):
 Synthetic fixtures elsewhere in the test suite:
     Developer-created regression material. They must not be treated as proof of compatibility with the actual Codex installations.
 
+## Subagent relations
+
+The viewer relates a parent rollout and the subagent rollouts it spawned
+(`docs/ARCHITECTURE.md`, "Subagent sessions") only through the chain that
+Report A (section F: "Join methods", "SubAgentActivity kinds and id forms") and
+Q4 of `local-full-corpus-verification-2026-09-27.md` establish on raw data:
+
+    spawn_agent call_id               = SubAgentActivity(kind started).id
+    SubAgentActivity.agent_thread_id  = child session_meta.id
+
+All 22 spawn calls with a `started` item (cli 0.147.0-alpha.6.6, 0.153.0,
+0.153.4) resolved to exactly one child rollout, agreeing with the child's
+declared parent, with no contradiction. The same tables are why nothing else
+identifies a relation:
+
+- `agent_thread_id` of other activity kinds: 110 records in all, 17 naming a
+  thread with several rollouts and 2 contradicting the declared parent; they
+  also name roots and siblings.
+- a declared parent thread alone: one thread spans two rollout files (thread
+  `01a07967-…`, the declared parent of `subagent-declared-boundary.jsonl`,
+  continued in `rollout-…-01a07967-…_01a08987-….jsonl`), so a thread id does
+  not choose a file.
+- `session_meta.session_id`: the root session; it contradicts the direct
+  parent for one child.
+- agent paths and timing: structure and order, not identities.
+
+The sanitized fixtures cannot show the join: sanitizer versions 1 and 2
+replace `agent_thread_id` with `<string:36>`. `subagent-thread-spawn.jsonl`
+still shows that a `started` item copied into a subagent's inherited prefix
+(line 19) is not that subagent's own spawn. The join itself is
+regression-tested on a labelled synthetic family
+(`test/fixtures/codex/subagentFamily.ts`, used by
+`test/main/providers/codex/sessionRelations.test.ts`), which is not
+compatibility evidence. Real-derived join fixtures would need a sanitizer rule
+that keeps `agent_thread_id` UUIDs and fixtures regenerated from the raw
+rollouts on the evidence machine.
+
 ## Sanitizer contract (version 2)
 
 Each transcript line is `{"line": N, "bytes": B, ...record}` where `line` is the

@@ -27,6 +27,6 @@ Exposed API via `window.electronAPI`, organized by domain:
 | Notifications | 9 | `notifications.get()`, `notifications.markRead()`, `notifications.onNew()`, etc. |
 | Utilities | 7 | `openPath()`, `openExternal()`, `onFileChange()`, `onTodoChange()`, `getZoomFactor()`, `onZoomFactorChanged()` |
 | Session | 1 | `session.scrollToLine()` |
-| Codex | 3 | `codex.listSessions()`, `codex.getSessionDetail()`, `codex.onSessionChange()` |
+| Codex | 4 | `codex.listSessions()`, `codex.getSessionDetail()`, `codex.getSessionRelations()`, `codex.onSessionChange()` |
 
 Full API signatures in `src/preload/index.ts`, channel constants in `src/preload/constants/ipcChannels.ts`.

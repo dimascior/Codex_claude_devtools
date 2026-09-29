@@ -42,12 +42,17 @@ components/
 ├── codex/                   # Codex rollout viewer (tab type 'codex')
 │   ├── CodexView            # Session list + timeline layout, periodic refresh
 │   ├── CodexSessionList     # Rollouts grouped by project, live dot, follow-live toggle
-│   ├── CodexSessionHeader   # Session badges, runtime line, execution stats, tokens, timeline filter
+│   ├── CodexSessionHeader   # Session badges, "Spawned by" line, runtime line, execution stats, tokens, timeline filter
 │   ├── CodexRuntimeSummary  # Header runtime: latest effective turn state (model, effort, approval, sandbox, profile) + "more"
-│   ├── CodexTimeline        # Chronological entries, auto-scroll while following live, TurnRuntimeContext provider
+│   ├── CodexTimeline        # Chronological entries, auto-scroll while following live, TurnRuntimeContext + CodexRelationsContext providers, focus on a spawn call
 │   ├── CodexSettingsChangeItem # Settings change: recorded (solid) vs derived turn_context_diff (dashed), previous → next
-│   ├── CodexExecutionCard   # One execution (command, code cell, file write, tool)
-│   ├── CodexExecutionDetails # Facts grid (incl. files written, Codex tags), provenance, effective runtime, argv, script, patch, args, output
+│   ├── CodexExecutionCard   # One execution (command, code cell, file write, tool); spawn cards show their child session
+│   ├── CodexExecutionDetails # Facts grid (incl. files written, Codex tags), provenance, session relation, effective runtime, argv, script, patch, args, output
+│   ├── CodexChildSessionLink # Spawn card: child session + "Open child" (resolved relations only), else a status line
+│   ├── CodexParentSessionLink # Subagent header: "Spawned by" + "Open parent" (opens the parent at its spawn call), evidence toggle
+│   ├── CodexRelationDetails # Session relation evidence: explicit provider ID chain, spawn call, started record, threads, lines, candidates
+│   ├── codexRelationFormatting.ts # Relation names, status lines and evidence rows
+│   ├── codexRelationsContext.ts # CodexRelationsContext: spawned-child relations by spawn execution id, openRelated
 │   ├── CodexProvenance      # Domain id, provider records (type, provider id, line), script call site, correlation methods
 │   ├── codexProvenanceModel.ts # Provenance groups and evidence class, built from Execution.evidence only
 │   ├── CodexRuntimeDetails  # "Effective runtime" of the execution's turn (via turnId), apart from provenance
