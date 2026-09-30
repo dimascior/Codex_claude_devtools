@@ -36,14 +36,17 @@ const MAX_REPORTED_HOSTS = 20;
  * Returns the first path that exists on disk.
  */
 function resolveRendererPath(): string | null {
+  // __dirname exists in CJS (Electron production) but not ESM (standalone via tsx).
+  const dir = typeof __dirname === 'string' ? __dirname : undefined;
+
   const candidates = [
     // Electron production (asarUnpack): app.asar.unpacked/out/renderer (real filesystem)
-    join(__dirname, '../../out/renderer').replace('app.asar', 'app.asar.unpacked'),
+    ...(dir ? [join(dir, '../../out/renderer').replace('app.asar', 'app.asar.unpacked')] : []),
     // Electron production (asar fallback): app.asar/out/renderer
-    join(__dirname, '../../out/renderer'),
+    ...(dir ? [join(dir, '../../out/renderer')] : []),
     // Standalone: dist-standalone/index.cjs → ../out/renderer
-    join(__dirname, '../out/renderer'),
-    // Fallback: relative to cwd (dev mode, standalone)
+    ...(dir ? [join(dir, '../out/renderer')] : []),
+    // Fallback: relative to cwd (dev mode, standalone via tsx)
     join(process.cwd(), 'out/renderer'),
   ];
 

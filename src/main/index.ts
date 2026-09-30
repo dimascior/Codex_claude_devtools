@@ -18,6 +18,7 @@ import {
 } from '@shared/constants';
 import { createLogger } from '@shared/utils/logger';
 import { app, BrowserWindow, ipcMain } from 'electron';
+import electronUpdater from 'electron-updater';
 import { existsSync } from 'fs';
 import { totalmem } from 'os';
 import { join } from 'path';
@@ -284,7 +285,7 @@ function initializeServices(): void {
   wireFileWatcherEvents(localContext);
 
   // Initialize updater service
-  updaterService = new UpdaterService();
+  updaterService = new UpdaterService(electronUpdater.autoUpdater);
   httpServer = new HttpServer();
 
   // Codex sessions ($CODEX_HOME/sessions) are always read locally.
