@@ -12,6 +12,9 @@
 // Re-export all types from main process types
 export * from '@main/types';
 
+// Re-export the provider-neutral domain (executions, timelines, agent sessions)
+export type * from '@main/domain';
+
 // Re-export notification and config types
 export * from './notifications';
 

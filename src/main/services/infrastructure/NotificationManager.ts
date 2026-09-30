@@ -13,13 +13,14 @@
  */
 
 import { createLogger } from '@shared/utils/logger';
-import { type BrowserWindow, Notification } from 'electron';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
 import { type DetectedError } from '../error/ErrorMessageBuilder';
+
+import type { BrowserWindow, Notification as ElectronNotification } from 'electron';
 
 const logger = createLogger('Service:NotificationManager');
 import { projectPathResolver } from '../discovery/ProjectPathResolver';
@@ -373,9 +374,17 @@ export class NotificationManager extends EventEmitter {
    * Shows a native macOS notification for an error.
    */
   private showNativeNotification(error: DetectedError): void {
-    // Guard against standalone/Docker mode where Electron's Notification API is unavailable
+    // Lazy-load Electron's Notification — unavailable in standalone/Docker mode.
+    let Notification: typeof ElectronNotification | undefined;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- a static import would load electron in standalone mode
+      Notification = (require('electron') as { Notification: typeof ElectronNotification })
+        .Notification;
+    } catch {
+      // Not running under Electron.
+    }
     if (
-      typeof Notification === 'undefined' ||
+      !Notification ||
       typeof Notification.isSupported !== 'function' ||
       !Notification.isSupported()
     ) {

@@ -7,6 +7,7 @@
 
 import { createLogger } from '@shared/utils/logger';
 
+import { registerCodexRoutes } from './codex';
 import { registerConfigRoutes } from './config';
 import { registerEventRoutes } from './events';
 import { registerMemoryRoutes } from './memory';
@@ -20,6 +21,7 @@ import { registerUpdaterRoutes } from './updater';
 import { registerUtilityRoutes } from './utility';
 import { registerValidationRoutes } from './validation';
 
+import type { CodexSessionService } from '../providers';
 import type {
   ChunkBuilder,
   DataCache,
@@ -43,6 +45,7 @@ export interface HttpServices {
   memoryReader: MemoryReader;
   updaterService: UpdaterService;
   sshConnectionManager: SshConnectionManager;
+  codexSessionService: CodexSessionService;
 }
 
 export function registerHttpRoutes(
@@ -61,6 +64,7 @@ export function registerHttpRoutes(
   registerSshRoutes(app, services.sshConnectionManager, sshModeSwitchCallback);
   registerUpdaterRoutes(app, services);
   registerMemoryRoutes(app, services);
+  registerCodexRoutes(app, services);
   registerEventRoutes(app);
 
   logger.info('All HTTP routes registered');

@@ -5,6 +5,7 @@
 
 import { TabUIProvider } from '@renderer/contexts/TabUIContext';
 
+import { CodexView } from '../codex/CodexView';
 import { DashboardView } from '../dashboard/DashboardView';
 import { MemoryView } from '../memory/MemoryView';
 import { NotificationsView } from '../notifications/NotificationsView';
@@ -44,6 +45,7 @@ export const PaneContent = ({ pane }: PaneContentProps): React.JSX.Element => {
             {tab.type === 'notifications' && <NotificationsView />}
             {tab.type === 'settings' && <SettingsView />}
             {tab.type === 'memory' && tab.projectId && <MemoryView projectId={tab.projectId} />}
+            {tab.type === 'codex' && <CodexView />}
             {tab.type === 'session' && (
               <TabUIProvider tabId={tab.id}>
                 <SessionTabContent tab={tab} isActive={isActive} />

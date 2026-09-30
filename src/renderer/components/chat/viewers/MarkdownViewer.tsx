@@ -27,6 +27,7 @@ import { FileText } from 'lucide-react';
 import remarkGfm from 'remark-gfm';
 import { useShallow } from 'zustand/react/shallow';
 
+import { MarkdownImage } from '../MarkdownImage';
 import {
   createSearchContext,
   EMPTY_SEARCH_MATCHES,
@@ -288,6 +289,9 @@ function createViewerMarkdownComponents(searchCtx: SearchContext | null): Compon
 
     // Horizontal rule
     hr: () => <hr className="my-4" style={{ borderColor: PROSE_TABLE_BORDER }} />,
+
+    // Images are never loaded from session content
+    img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
   };
 }
 

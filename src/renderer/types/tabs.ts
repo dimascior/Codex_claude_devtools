@@ -78,7 +78,7 @@ export interface Tab {
   id: string;
 
   /** Type of content displayed in this tab */
-  type: 'session' | 'dashboard' | 'notifications' | 'settings' | 'memory';
+  type: 'session' | 'dashboard' | 'notifications' | 'settings' | 'memory' | 'codex';
 
   /** Session ID (required when type === 'session') */
   sessionId?: string;

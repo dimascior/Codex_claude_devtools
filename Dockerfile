@@ -47,6 +47,8 @@ RUN mkdir -p /data/.claude
 
 ENV NODE_ENV=production
 ENV CLAUDE_ROOT=/data/.claude
+# Listen on all interfaces inside the container so the published port works;
+# publish it on the host's loopback (-p 127.0.0.1:3456:3456).
 ENV HOST=0.0.0.0
 ENV PORT=3456
 

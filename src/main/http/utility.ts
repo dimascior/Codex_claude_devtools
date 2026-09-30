@@ -26,8 +26,13 @@ export function registerUtilityRoutes(app: FastifyInstance): void {
   // App version
   app.get('/api/version', async () => {
     try {
-      // Read version from package.json (works in both Electron and Node)
-      const pkgPath = path.resolve(__dirname, '../../../package.json');
+      // Read version from package.json (works in both Electron and Node).
+      // __dirname is CJS-only; fall back to cwd for ESM (standalone via tsx).
+      const base = typeof __dirname === 'string' ? __dirname : process.cwd();
+      const pkgPath =
+        typeof __dirname === 'string'
+          ? path.resolve(base, '../../../package.json')
+          : path.resolve(base, 'package.json');
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { version: string };
       return pkg.version;
     } catch {

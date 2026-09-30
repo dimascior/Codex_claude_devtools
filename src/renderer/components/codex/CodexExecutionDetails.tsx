@@ -1,0 +1,208 @@
+/**
+ * CodexExecutionDetails - Expanded body of an execution: exact command,
+ * execution facts (cwd, exit code, timing, files written, Codex's own command
+ * classification), provenance (ids, records, links), the session it spawned
+ * (for spawn executions), the effective runtime of its turn, input (or, without
+ * patch text of its own, the file changes Codex recorded), output.
+ */
+
+import { useContext } from 'react';
+
+import { CodeBlockViewer } from '@renderer/components/chat/viewers/CodeBlockViewer';
+import { CopyablePath } from '@renderer/components/common/CopyablePath';
+import { COLOR_TEXT, COLOR_TEXT_MUTED } from '@renderer/constants/cssVariables';
+import { formatDuration } from '@renderer/utils/formatters';
+import { hasAppliedFileWrites } from '@shared/utils/executionEvidence';
+
+import {
+  commandActionLabel,
+  commandActionTarget,
+  describeFileWrite,
+  durationSourceLabel,
+  fileWritesNote,
+  generationLabel,
+  patchText,
+} from './codexFormatting';
+import { CodexOutputBlock } from './CodexOutputBlock';
+import { CodexPatchView } from './CodexPatchView';
+import { CodexProvenance } from './CodexProvenance';
+import { CodexRecordedDiffs } from './CodexRecordedDiffs';
+import { CodexRelationDetails } from './CodexRelationDetails';
+import { CodexRelationsContext } from './codexRelationsContext';
+import { CodexRuntimeDetails } from './CodexRuntimeDetails';
+
+import type { Execution } from '@shared/types';
+
+interface CodexExecutionDetailsProps {
+  execution: Execution;
+  /** Show the patch or recorded changes (off when the host card shows them already) */
+  showChanges?: boolean;
+}
+
+interface Fact {
+  label: string;
+  value: React.ReactNode;
+}
+
+function buildFacts(exec: Execution): Fact[] {
+  const facts: Fact[] = [];
+  if (exec.cwd) {
+    facts.push({
+      label: 'Working dir',
+      value: <CopyablePath displayText={exec.cwd} copyText={exec.cwd} className="font-mono" />,
+    });
+  }
+  if (exec.shell) {
+    facts.push({ label: 'Shell', value: exec.shell });
+  }
+  if (exec.exitCode !== undefined) {
+    facts.push({ label: 'Exit code', value: String(exec.exitCode) });
+  }
+  if (exec.durationMs !== undefined) {
+    facts.push({
+      label: 'Duration',
+      value: `${formatDuration(exec.durationMs)} (${durationSourceLabel(exec.durationSource)})`,
+    });
+  }
+  if (exec.statusDetail) {
+    facts.push({ label: 'Status', value: exec.statusDetail });
+  }
+  if (exec.processId) {
+    facts.push({ label: 'Process session', value: exec.processId });
+  }
+  const generation = generationLabel(exec);
+  facts.push({
+    label: 'Recorded as',
+    value: generation ? `${exec.source} (${generation})` : exec.source,
+  });
+  if (exec.fileWrites && exec.fileWrites.length > 0) {
+    const note = fileWritesNote(exec);
+    facts.push({
+      label: hasAppliedFileWrites(exec) ? 'Files written' : 'Patch files',
+      value: (
+        <>
+          <ul className="space-y-0.5 font-mono">
+            {exec.fileWrites.map((write) => (
+              <li key={write.path}>{describeFileWrite(write)}</li>
+            ))}
+          </ul>
+          {note && <div style={{ color: COLOR_TEXT_MUTED }}>{note}</div>}
+        </>
+      ),
+    });
+  }
+  if (exec.commandActions && exec.commandActions.length > 0) {
+    facts.push({
+      label: 'Codex tags',
+      value: (
+        <ul className="space-y-0.5">
+          {exec.commandActions.map((action, index) => {
+            const target = commandActionTarget(action);
+            return (
+              <li key={`${index}:${action.type}`}>
+                <span className="font-semibold">{commandActionLabel(action)}</span>
+                {target && <span className="font-mono"> {target}</span>}
+                {action.type === 'read' && action.path && action.path !== target && (
+                  <span className="font-mono" style={{ color: COLOR_TEXT_MUTED }}>
+                    {' '}
+                    ({action.path})
+                  </span>
+                )}
+                {action.command && (
+                  <div className="font-mono" style={{ color: COLOR_TEXT_MUTED }}>
+                    {action.command}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      ),
+    });
+  }
+  return facts;
+}
+
+export const CodexExecutionDetails = ({
+  execution: exec,
+  showChanges = true,
+}: CodexExecutionDetailsProps): React.JSX.Element => {
+  const facts = buildFacts(exec);
+  const patch = patchText(exec);
+  const childRelation = useContext(CodexRelationsContext).childrenByExecutionId.get(exec.id);
+  const outputCount = exec.outputCount ?? 0;
+  const argvDiffers =
+    exec.argv !== undefined && exec.argv.length > 0 && exec.argv.join(' ') !== exec.command;
+  const showArgs =
+    exec.kind !== 'command' &&
+    exec.kind !== 'command_input' &&
+    exec.kind !== 'code_cell' &&
+    patch === undefined &&
+    exec.args !== undefined &&
+    Object.keys(exec.args).length > 0;
+
+  return (
+    <div className="space-y-2">
+      {exec.command && exec.kind !== 'patch' && (
+        <CodexOutputBlock
+          label={exec.kind === 'command_input' ? 'Input' : 'Command'}
+          text={exec.command}
+          maxHeightClass="max-h-48"
+        />
+      )}
+      {argvDiffers && (
+        <CodexOutputBlock label="argv" text={JSON.stringify(exec.argv)} maxHeightClass="max-h-32" />
+      )}
+
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
+        {facts.map((fact) => (
+          <div key={fact.label} className="contents">
+            <dt style={{ color: COLOR_TEXT_MUTED }}>{fact.label}</dt>
+            <dd className="min-w-0 break-words" style={{ color: COLOR_TEXT }}>
+              {fact.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+
+      <CodexProvenance execution={exec} />
+      {childRelation && <CodexRelationDetails relation={childRelation} />}
+      <CodexRuntimeDetails execution={exec} />
+
+      {exec.kind === 'code_cell' && exec.input && (
+        <CodeBlockViewer
+          fileName="exec cell (JavaScript)"
+          content={exec.input}
+          language="javascript"
+          maxHeight="max-h-80"
+        />
+      )}
+      {showChanges &&
+        (patch !== undefined ? (
+          <CodexPatchView patch={patch} />
+        ) : (
+          <CodexRecordedDiffs execution={exec} />
+        ))}
+      {showArgs && (
+        <CodexOutputBlock
+          label="Arguments"
+          text={JSON.stringify(exec.args, null, 2)}
+          maxHeightClass="max-h-64"
+        />
+      )}
+      {!showArgs && exec.kind === 'tool' && exec.input && !exec.args && (
+        <CodexOutputBlock label="Input" text={exec.input} maxHeightClass="max-h-64" />
+      )}
+
+      {(exec.output !== undefined || exec.status !== 'unknown') && (
+        <CodexOutputBlock
+          label="Output"
+          meta={outputCount > 1 ? `${outputCount} outputs` : undefined}
+          text={exec.output ?? ''}
+          truncated={exec.outputTruncated}
+          imageCount={exec.outputImageCount}
+        />
+      )}
+    </div>
+  );
+};

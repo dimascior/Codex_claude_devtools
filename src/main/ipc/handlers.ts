@@ -11,11 +11,13 @@
  * - notifications.ts: Notification management
  * - config.ts: App configuration
  * - ssh.ts: SSH connection management
+ * - codex.ts: Codex rollout listing and execution timelines
  */
 
 import { createLogger } from '@shared/utils/logger';
 import { ipcMain } from 'electron';
 
+import { initializeCodexHandlers, registerCodexHandlers, removeCodexHandlers } from './codex';
 import { initializeConfigHandlers, registerConfigHandlers, removeConfigHandlers } from './config';
 import {
   initializeContextHandlers,
@@ -52,6 +54,7 @@ import { registerUtilityHandlers, removeUtilityHandlers } from './utility';
 import { registerValidationHandlers, removeValidationHandlers } from './validation';
 import { registerWindowHandlers, removeWindowHandlers } from './window';
 
+import type { CodexSessionService } from '../providers';
 import type {
   ServiceContext,
   ServiceContextRegistry,
@@ -70,7 +73,8 @@ export function initializeIpcHandlers(
     rewire: (context: ServiceContext) => void;
     full: (context: ServiceContext) => void;
     onClaudeRootPathUpdated: (claudeRootPath: string | null) => Promise<void> | void;
-  }
+  },
+  codexSessionService: CodexSessionService
 ): void {
   // Initialize domain handlers with registry
   initializeProjectHandlers(registry);
@@ -81,6 +85,7 @@ export function initializeIpcHandlers(
   initializeSshHandlers(sshManager, registry, contextCallbacks.rewire);
   initializeContextHandlers(registry, contextCallbacks.rewire);
   initializeMemoryHandlers(registry);
+  initializeCodexHandlers(codexSessionService);
   initializeConfigHandlers({
     onClaudeRootPathUpdated: contextCallbacks.onClaudeRootPathUpdated,
   });
@@ -99,6 +104,7 @@ export function initializeIpcHandlers(
   registerContextHandlers(ipcMain);
   registerMemoryHandlers(ipcMain);
   registerWindowHandlers(ipcMain);
+  registerCodexHandlers(ipcMain);
 
   logger.info('All handlers registered');
 }
@@ -121,6 +127,7 @@ export function removeIpcHandlers(): void {
   removeContextHandlers(ipcMain);
   removeMemoryHandlers(ipcMain);
   removeWindowHandlers(ipcMain);
+  removeCodexHandlers(ipcMain);
 
   logger.info('All handlers removed');
 }

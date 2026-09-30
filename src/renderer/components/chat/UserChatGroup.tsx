@@ -13,6 +13,7 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { CopyButton } from '../common/CopyButton';
 
+import { MarkdownImage } from './MarkdownImage';
 import {
   createSearchContext,
   EMPTY_SEARCH_MATCHES,
@@ -308,6 +309,9 @@ function createUserMarkdownComponents(
     ),
 
     hr: () => <hr className="my-4" style={{ borderColor: 'var(--chat-user-tag-border)' }} />,
+
+    // Images are never loaded from session content
+    img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
   };
 }
 

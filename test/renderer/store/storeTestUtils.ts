@@ -4,6 +4,7 @@
 
 import { create } from 'zustand';
 
+import { createCodexSlice } from '../../../src/renderer/store/slices/codexSlice';
 import { createConfigSlice } from '../../../src/renderer/store/slices/configSlice';
 import { createConversationSlice } from '../../../src/renderer/store/slices/conversationSlice';
 import { createMemorySlice } from '../../../src/renderer/store/slices/memorySlice';
@@ -39,6 +40,7 @@ export function createTestStore() {
     ...createNotificationSlice(...args),
     ...createConfigSlice(...args),
     ...createMemorySlice(...args),
+    ...createCodexSlice(...args),
   }));
 }
 

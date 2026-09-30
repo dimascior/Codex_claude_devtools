@@ -157,6 +157,12 @@ See the moment your context hits the limit. Visualizes how context fills, compre
 System notifications for `.env` access, tool errors, high token usage, and custom regex patterns on any field.
 
 
+### Codex Sessions
+
+Open the **Codex** tab to inspect [Codex](https://github.com/openai/codex) rollouts (CLI, IDE extension and desktop app) from `$CODEX_HOME/sessions` (default `~/.codex`, i.e. `%USERPROFILE%\.codex` on Windows). The live rollout is selected automatically and followed as it grows. Every tool call — shell commands, patches, MCP calls, web searches, subagent tools — is shown in order with its output, status, exit code, duration and working directory. Code-mode `exec` cells show their nested operations as a tree, and the viewer marks which of them Codex actually recorded and which only appear in the cell's code. Operations without a recorded outcome stay "unknown" instead of looking successful. Subagent sessions are titled by their task name and summarize the history they inherited from their parent. Rollouts are grouped by working directory, and compressed `.jsonl.zst` rollouts are read when the runtime supports zstd. Encrypted reasoning and encrypted inter-agent payloads are never decoded.
+
+How the viewer is built — providers, the normalized session model, recorded vs inferred activity, live follow and the privacy model — is described in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); planned work is in [docs/ROADMAP.md](docs/ROADMAP.md).
+
 ### Command Palette & Multi-Pane Layout
 
 **Cmd+K** for cross-session search. Open multiple sessions side-by-side with drag-and-drop tabs.
@@ -167,13 +173,13 @@ System notifications for `.env` access, tool errors, high token usage, and custo
 
 ## Not a Wrapper
 
-claude-devtools does **not** wrap, modify, or interfere with Claude Code. It reads session logs that already exist on your machine. Works with sessions from the terminal, IDEs, or any tool that uses Claude Code.
+claude-devtools does **not** wrap, modify, or interfere with Claude Code or Codex. It reads session logs that already exist on your machine. Works with sessions from the terminal, IDEs, or any tool that uses Claude Code or Codex.
 
 ---
 
 ## Docker / Standalone Deployment
 
-Run without Electron — in Docker, on a remote server, or anywhere Node.js runs.
+Run without Electron, in Docker or anywhere Node.js runs. The server is local-only by default (see [Local HTTP trust boundary](#local-http-trust-boundary)).
 
 ```bash
 docker compose up
@@ -184,16 +190,29 @@ Or manually:
 
 ```bash
 docker build -t claude-devtools .
-docker run -p 3456:3456 -v ~/.claude:/data/.claude:ro claude-devtools
+docker run -p 127.0.0.1:3456:3456 -v ~/.claude:/data/.claude:ro claude-devtools
 ```
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CLAUDE_ROOT` | `~/.claude` | Path to the `.claude` data directory |
-| `HOST` | `0.0.0.0` | Bind address |
+| `CODEX_HOME` | `~/.codex` | Codex home directory (rollouts are read from `sessions/`). In Docker, mount it read-only, e.g. `-v ~/.codex:/data/.codex:ro -e CODEX_HOME=/data/.codex` |
+| `HOST` | `127.0.0.1` | Bind address. The Docker image sets `0.0.0.0` inside the container; `docker compose` and the command above publish the port on the host's loopback only |
+| `ALLOWED_HOSTS` | *(none)* | Comma-separated host names the server answers besides `localhost`, `127.0.0.0/8` and `[::1]` |
+| `CORS_ORIGIN` | localhost origins | Cross-origin policy; `*` allows any web page to read the API |
 | `PORT` | `3456` | Listen port |
 
-The standalone server has **zero** outbound network calls. For maximum isolation: `docker run --network none -p 3456:3456 -v ~/.claude:/data/.claude:ro claude-devtools`. See [SECURITY.md](SECURITY.md).
+The standalone server has **zero** outbound network calls. For maximum isolation: `docker run --network none -p 127.0.0.1:3456:3456 -v ~/.claude:/data/.claude:ro claude-devtools`. See [SECURITY.md](SECURITY.md).
+
+### Local HTTP trust boundary
+
+The HTTP server (standalone mode, or the in-app server when enabled in settings) serves your session data: prompts, commands, outputs and file contents. It has no authentication, so it is local-only by default:
+
+- it binds to `127.0.0.1` (the in-app server always does; standalone mode unless `HOST` says otherwise);
+- it answers only requests whose `Host` header is `localhost`, a `127.0.0.0/8` address or `[::1]`, plus any `ALLOWED_HOSTS`. Other requests, such as a web page that points its own domain at `127.0.0.1` (DNS rebinding), get `403` before any route runs;
+- cross-origin reads are limited to localhost origins unless `CORS_ORIGIN` is set.
+
+Remote serving without authentication is out of scope for this project. Serving other machines (`HOST=0.0.0.0` with `ALLOWED_HOSTS`, or publishing the Docker port on all interfaces) is an explicit choice: anyone who can reach the port can read every session. Put it behind your own authenticating proxy if you need that.
 
 ---
 
@@ -237,7 +256,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. Please read our [Code of 
 
 ## Security
 
-IPC handlers validate all inputs with strict path containment checks. File reads are constrained to the project root and `~/.claude`. See [SECURITY.md](SECURITY.md).
+IPC handlers validate all inputs with strict path containment checks. File reads are constrained to the project root, `~/.claude` and `$CODEX_HOME/sessions`. The HTTP server is local-only by default ([Local HTTP trust boundary](#local-http-trust-boundary)). See [SECURITY.md](SECURITY.md).
 
 ## License
 

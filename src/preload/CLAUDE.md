@@ -34,6 +34,11 @@ Groups exposed methods by domain:
 - `config.{snooze,clearSnooze,selectFolders}`
 - `config.{openInEditor,pinSession,unpinSession}`
 
+### Codex APIs
+- `codex.listSessions()` - Rollouts grouped by project, with live/latest session ids
+- `codex.getSessionDetail(sessionId, fingerprint?)` - Normalized timeline (or `{ unchanged: true }`)
+- `codex.onSessionChange()` - Rollout add/change/unlink events
+
 ### Utilities
 - `openPath()` - Shell operations
 - `openExternal()` - Open URLs in browser

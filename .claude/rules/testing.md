@@ -22,14 +22,27 @@ pnpm test:task-filtering  # Task tool filtering
 ## Test Structure
 ```
 test/
+├── fixtures/
+│   └── codex/           # Synthetic Codex rollouts (function calls, code mode, paginated, legacy);
+│                        # subagentFamily.ts: labelled synthetic parent/child/grandchild/continuation rollouts
 ├── main/
+│   ├── http/            # Host policy (loopback bind, Host allowlist)
 │   ├── ipc/             # IPC handler tests
 │   │   ├── configValidation.test.ts
 │   │   └── guards.test.ts
+│   ├── providers/
+│   │   └── codex/       # Rollout parsing, normalization, output/command parsing, session service,
+│   │                    # realObserved (real fixtures), evidenceLinking (linking rules),
+│   │                    # CodexMetadataParser (UUIDv7 ids, inherited history, subagent task names),
+│   │                    # recordedActions (parsed_cmd tags, file writes, recorded change text),
+│   │                    # runtimeState (effective turn state, recorded/derived settings changes),
+│   │                    # spawnObservations (spawn call ↔ started item id chain, own history, line pre-filter),
+│   │                    # sessionRelations (parent ↔ child resolution, negative evidence, ambiguity,
+│   │                    # continuation files, live add/unlink, read cost)
 │   ├── services/        # Service tests
 │   │   ├── analysis/    (ChunkBuilder)
 │   │   ├── discovery/   (ProjectPathResolver, SessionSearcher)
-│   │   ├── infrastructure/ (FileWatcher)
+│   │   ├── infrastructure/ (FileWatcher, HttpServer local exposure)
 │   │   └── parsing/     (MessageClassifier, SessionParser)
 │   └── utils/           # Main process utilities
 │       ├── jsonl.test.ts
@@ -38,12 +51,14 @@ test/
 │       ├── regexValidation.test.ts
 │       └── tokenizer.test.ts
 ├── renderer/
+│   ├── components/      # Component helpers (codexFormatting, codexProvenance, codexRuntime, codexRelations, codexTimelineRows, renderOutput, markdownImages)
 │   ├── hooks/           # Hook tests
 │   │   ├── navigationUtils.test.ts
 │   │   ├── useAutoScrollBottom.test.ts
 │   │   ├── useSearchContextNavigation.test.ts
 │   │   └── useVisibleAIGroup.test.ts
 │   ├── store/           # Zustand store slices
+│   │   ├── codexSlice.test.ts
 │   │   ├── notificationSlice.test.ts
 │   │   ├── paneSlice.test.ts
 │   │   ├── pathResolution.test.ts
@@ -55,6 +70,7 @@ test/
 │       ├── dateGrouping.test.ts
 │       ├── formatters.test.ts
 │       └── pathUtils.test.ts
+├── scripts/             # Fixture sanitizer contract and record selections (codexRolloutTranscript), survey runtime-state section (codexRolloutState)
 ├── shared/
 │   └── utils/           # Shared utilities
 │       ├── markdownSearchRendererAlignment.test.ts
@@ -62,6 +78,7 @@ test/
 │       ├── modelParser.test.ts
 │       └── tokenFormatting.test.ts
 ├── mocks/               # Test fixtures and mocks
+├── moduleLayout.test.ts # No names/module names that differ only by case (Windows/macOS resolution)
 └── setup.ts             # Test setup/config
 ```
 
@@ -69,8 +86,11 @@ test/
 - `services/analysis/ChunkBuilder.ts` - Chunk building logic
 - `services/parsing/SessionParser.ts` - JSONL parsing
 - `services/parsing/MessageClassifier.ts` - Message classification
+- `providers/codex/*` - Codex rollout parsing and normalization (`test/main/providers/codex/`)
 - Store slices in `src/renderer/store/slices/`
 - Utility functions in `*/utils/`
 
 ## Test Data
 Test fixtures use real JSONL session data from `~/.claude/projects/`.
+Codex fixtures in `test/fixtures/codex/` are synthetic rollouts in the current envelope format (plus one legacy file): regression tests, not compatibility proof.
+Sanitized records from real Codex rollouts live in `tests/fixtures/codex/real-observed/` (see `docs/codex-real-validation/`); they take precedence over synthetic fixtures. Never alter their topology to make a test pass.

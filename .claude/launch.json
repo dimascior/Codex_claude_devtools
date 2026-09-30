@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "standalone",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["standalone"],
+      "port": 3456
+    }
+  ]
+}
