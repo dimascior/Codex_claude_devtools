@@ -22,6 +22,8 @@ import type { Execution, FileWrite, RecordedFileDiff } from '@shared/types';
 
 interface CodexRecordedDiffsProps {
   execution: Execution;
+  /** Lines shown per file until "Show all" is clicked */
+  previewLines?: number;
 }
 
 type RecordedWrite = FileWrite & { diff: RecordedFileDiff };
@@ -38,6 +40,7 @@ function toneOf(write: RecordedWrite): PatchViewTone {
 
 export const CodexRecordedDiffs = ({
   execution: exec,
+  previewLines,
 }: CodexRecordedDiffsProps): React.JSX.Element | null => {
   const writes = (exec.fileWrites ?? []).filter(
     (write): write is RecordedWrite => write.diff !== undefined
@@ -75,7 +78,11 @@ export const CodexRecordedDiffs = ({
               <span style={{ color: COLOR_TEXT_MUTED }}>{recordedDiffLabel(write.diff)}</span>
             </div>
             {write.diff.text.length > 0 && (
-              <CodexPatchView patch={write.diff.text} tone={toneOf(write)} />
+              <CodexPatchView
+                patch={write.diff.text}
+                tone={toneOf(write)}
+                previewLines={previewLines}
+              />
             )}
             {omitted && <div style={{ color: COLOR_TEXT_MUTED }}>{omitted}</div>}
           </div>

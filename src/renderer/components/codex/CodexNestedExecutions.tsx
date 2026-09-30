@@ -4,7 +4,9 @@
  * Rows come from different evidence: call sites found in the cell script
  * (static analysis, nothing proves they ran), calls Codex listed as attempted,
  * and executions Codex recorded while the cell was running. Each row carries a
- * badge saying which, and expands to its details.
+ * badge saying which, and expands to its details. File writes Codex recorded
+ * while the cell ran are timeline entries of their own; the tree only counts
+ * them.
  */
 
 import { useState } from 'react';
@@ -24,6 +26,7 @@ import {
   evidenceBadge,
   executionLabel,
   executionSummary,
+  isRecordedFileWrite,
   KIND_ICONS,
 } from './codexFormatting';
 import { CodexStatusBadge } from './CodexStatusBadge';
@@ -37,8 +40,7 @@ interface CodexNestedExecutionsProps {
 /**
  * "3 recorded by Codex · 1 matched to the script by command · 2 found in the script only".
  */
-function describeEvidence(cell: Execution): string {
-  const children = cell.children ?? [];
+function describeEvidence(cell: Execution, children: readonly Execution[]): string {
   let recorded = 0;
   let linked = 0;
   let scriptOnly = 0;
@@ -82,15 +84,33 @@ function relativeCwd(child: Execution, cell: Execution): string | undefined {
   return child.cwd;
 }
 
+/** "2 file writes recorded while this cell ran are separate entries" */
+function describeSeparateWrites(count: number): string | undefined {
+  if (count === 0) {
+    return undefined;
+  }
+  return count === 1
+    ? '1 file write recorded while this cell ran is a separate entry'
+    : `${count} file writes recorded while this cell ran are separate entries`;
+}
+
 export const CodexNestedExecutions = ({ cell }: CodexNestedExecutionsProps): React.JSX.Element => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const children = cell.children ?? [];
+  const all = cell.children ?? [];
+  const children = all.filter((child) => !isRecordedFileWrite(child));
+  const separateWrites = describeSeparateWrites(all.length - children.length);
+  const summary = [
+    children.length > 0
+      ? `${children.length} nested operation${children.length === 1 ? '' : 's'}`
+      : undefined,
+    children.length > 0 ? describeEvidence(cell, children) : undefined,
+    separateWrites,
+  ].filter((part): part is string => Boolean(part));
 
   return (
     <div>
       <div className="mb-1 text-[11px]" style={{ color: COLOR_TEXT_MUTED }}>
-        {children.length} nested operation{children.length === 1 ? '' : 's'} ·{' '}
-        {describeEvidence(cell)}
+        {summary.join(' · ')}
       </div>
       <ul>
         {children.map((child, index) => {

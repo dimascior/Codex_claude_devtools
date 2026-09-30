@@ -1,7 +1,9 @@
 /**
  * CodexTimeline - Chronological view of a Codex session: requests, agent
- * messages, reasoning, executions, turn events and settings changes, in rollout
- * order. Provides each turn's effective runtime state and the session's
+ * messages, reasoning, executions, file writes, turn events and settings
+ * changes, in rollout order. Every file write Codex recorded is an entry of
+ * its own (`codexTimelineRows.ts`), also one recorded while a code cell ran.
+ * Provides each turn's effective runtime state and the session's
  * spawned-child relations to execution cards, and brings a requested execution
  * (the spawn call a child session was opened from) into view.
  */
@@ -14,13 +16,15 @@ import { TriangleAlert } from 'lucide-react';
 
 import { CodexEventItem } from './CodexEventItem';
 import { CodexExecutionCard } from './CodexExecutionCard';
-import { type CodexTimelineFilter, filterTimeline, formatClockTime } from './codexFormatting';
+import { CodexFileWriteCard } from './CodexFileWriteCard';
+import { type CodexTimelineFilter, formatClockTime } from './codexFormatting';
 import { CodexMessageItem } from './CodexMessageItem';
 import { CodexReasoningItem } from './CodexReasoningItem';
 import { CodexRelationsContext } from './codexRelationsContext';
 import { TurnRuntimeContext } from './codexRuntimeContext';
 import { turnStatesById } from './codexRuntimeFormatting';
 import { CodexSettingsChangeItem } from './CodexSettingsChangeItem';
+import { buildTimelineRows, type CodexTimelineRow, filterTimelineRows } from './codexTimelineRows';
 
 import type { AgentSessionDetail, AgentSessionRelation, TimelineEntry } from '@shared/types';
 
@@ -38,6 +42,10 @@ interface CodexTimelineProps {
   /** Execution to bring into view once it is rendered */
   focusExecutionId: string | null;
   onFocusHandled: () => void;
+}
+
+function renderRow(row: CodexTimelineRow): React.JSX.Element {
+  return row.kind === 'file_write' ? <CodexFileWriteCard row={row} /> : renderEntry(row.entry);
 }
 
 function renderEntry(entry: TimelineEntry): React.JSX.Element {
@@ -67,7 +75,8 @@ export const CodexTimeline = ({
   focusExecutionId,
   onFocusHandled,
 }: CodexTimelineProps): React.JSX.Element => {
-  const entries = useMemo(() => filterTimeline(detail.timeline, filter), [detail.timeline, filter]);
+  const allRows = useMemo(() => buildTimelineRows(detail.timeline), [detail.timeline]);
+  const rows = useMemo(() => filterTimelineRows(allRows, filter), [allRows, filter]);
   const turnStates = useMemo(() => turnStatesById(detail.runtime), [detail.runtime]);
   const relations = useMemo(
     () => ({
@@ -80,7 +89,7 @@ export const CodexTimeline = ({
     }),
     [childRelations, onOpenRelated]
   );
-  const { scrollContainerRef } = useAutoScrollBottom([entries.length, detail.fingerprint], {
+  const { scrollContainerRef } = useAutoScrollBottom([rows.length, detail.fingerprint], {
     threshold: 150,
     enabled: followLive,
     autoBehavior: 'auto',
@@ -90,7 +99,12 @@ export const CodexTimeline = ({
   // may not have it yet); the next selection replaces it.
   const focusShown =
     focusExecutionId !== null &&
-    entries.some((entry) => entry.kind === 'execution' && entry.execution.id === focusExecutionId);
+    rows.some(
+      (row) =>
+        row.kind === 'entry' &&
+        row.entry.kind === 'execution' &&
+        row.entry.execution.id === focusExecutionId
+    );
   const highlight = useRef<{ element: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(
     null
   );
@@ -161,7 +175,7 @@ export const CodexTimeline = ({
               </div>
             ))}
 
-            {entries.length === 0 && (
+            {rows.length === 0 && (
               <div className="py-12 text-center text-sm" style={{ color: COLOR_TEXT_MUTED }}>
                 {filter === 'all'
                   ? 'Nothing recorded in this rollout yet.'
@@ -171,25 +185,29 @@ export const CodexTimeline = ({
               </div>
             )}
 
-            {entries.map((entry) => (
+            {rows.map((row) => (
               <div
-                key={entry.id}
+                key={row.key}
                 className="flex gap-3 rounded-md transition-shadow"
                 style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 48px' }}
-                data-execution-id={entry.kind === 'execution' ? entry.execution.id : undefined}
+                data-execution-id={
+                  row.kind === 'entry' && row.entry.kind === 'execution'
+                    ? row.entry.execution.id
+                    : undefined
+                }
               >
                 <div
                   className="w-16 shrink-0 pt-2 text-right font-mono text-[11px] tabular-nums"
                   style={{ color: COLOR_TEXT_MUTED }}
                   title={
-                    entry.timestamp
-                      ? `${entry.timestamp} · line ${entry.lineNumber}`
-                      : `line ${entry.lineNumber}`
+                    row.timestamp
+                      ? `${row.timestamp} · line ${row.lineNumber}`
+                      : `line ${row.lineNumber}`
                   }
                 >
-                  {formatClockTime(entry.timestamp)}
+                  {formatClockTime(row.timestamp)}
                 </div>
-                <div className="min-w-0 flex-1">{renderEntry(entry)}</div>
+                <div className="min-w-0 flex-1">{renderRow(row)}</div>
               </div>
             ))}
           </div>

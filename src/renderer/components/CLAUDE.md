@@ -44,9 +44,11 @@ components/
 │   ├── CodexSessionList     # Rollouts grouped by project, live dot, follow-live toggle
 │   ├── CodexSessionHeader   # Session badges, "Spawned by" line, runtime line, execution stats, tokens, timeline filter
 │   ├── CodexRuntimeSummary  # Header runtime: latest effective turn state (model, effort, approval, sandbox, profile) + "more"
-│   ├── CodexTimeline        # Chronological entries, auto-scroll while following live, TurnRuntimeContext + CodexRelationsContext providers, focus on a spawn call
+│   ├── CodexTimeline        # Chronological rows (entries + separate file writes), auto-scroll while following live, TurnRuntimeContext + CodexRelationsContext providers, focus on a spawn call
+│   ├── codexTimelineRows.ts # Timeline rows: recorded file writes as rows of their own (lifted out of cells, placed by record line), row filters
+│   ├── CodexFileWriteCard   # One file write: files and changes shown inline (preview, "Show all"), the cell or execution it was recorded for, details on click
 │   ├── CodexSettingsChangeItem # Settings change: recorded (solid) vs derived turn_context_diff (dashed), previous → next
-│   ├── CodexExecutionCard   # One execution (command, code cell, file write, tool); spawn cards show their child session
+│   ├── CodexExecutionCard   # One execution (command, code cell, tool; file writes use CodexFileWriteCard); spawn cards show their child session
 │   ├── CodexExecutionDetails # Facts grid (incl. files written, Codex tags), provenance, session relation, effective runtime, argv, script, patch or recorded changes, args, output
 │   ├── CodexRecordedDiffs   # Per-file change text of the file-change record (unified diff / file content), with omitted size
 │   ├── CodexChildSessionLink # Spawn card: child session + "Open child" (resolved relations only), else a status line
@@ -59,11 +61,11 @@ components/
 │   ├── CodexRuntimeDetails  # "Effective runtime" of the execution's turn (via turnId), apart from provenance
 │   ├── codexRuntimeContext.ts # TurnRuntimeContext: turn states by turn id
 │   ├── codexRuntimeFormatting.ts # Setting labels/values, current runtime, settings-change wording
-│   ├── CodexNestedExecutions # Code-cell children as a tree
+│   ├── CodexNestedExecutions # Code-cell children as a tree, without the recorded file writes (counted, shown as their own entries)
 │   ├── CodexCommandActions  # Codex's recorded read / list / search tags (parsed_cmd)
 │   ├── CodexStatusBadge / CodexOutputBlock / CodexPatchView
 │   ├── CodexMessageItem / CodexReasoningItem / CodexEventItem
-│   └── codexFormatting.ts   # Status labels, icons, summaries, filterTimeline
+│   └── codexFormatting.ts   # Status labels, icons, summaries, patch text, recorded-write test
 ├── common/                  # Shared UI primitives
 │   ├── CopyButton           # Copy to clipboard button
 │   ├── CopyablePath         # Clickable, copyable file path

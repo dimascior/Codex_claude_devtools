@@ -11,13 +11,12 @@ import {
   executionLabel,
   executionSummary,
   fileWritesSummary,
-  filterTimeline,
   formatRelativeTime,
   shortCallId,
   statusLabel,
 } from '../../../src/renderer/components/codex/codexFormatting';
 
-import type { Execution, TimelineEntry } from '../../../src/main/domain';
+import type { Execution } from '../../../src/main/domain';
 
 function exec(overrides: Partial<Execution>): Execution {
   return {
@@ -32,10 +31,6 @@ function exec(overrides: Partial<Execution>): Execution {
     evidence: {},
     ...overrides,
   };
-}
-
-function entry(id: string, execution: Execution): TimelineEntry {
-  return { kind: 'execution', id, lineNumber: execution.lineNumber, execution };
 }
 
 describe('codexFormatting', () => {
@@ -71,29 +66,38 @@ describe('codexFormatting', () => {
     ).toBe('/a.png');
   });
 
-  it('filters the timeline to executions and problems', () => {
-    const ok = exec({ id: 'ok', lineNumber: 2 });
-    const failedChild = exec({
-      id: 'cell',
-      kind: 'code_cell',
-      lineNumber: 3,
-      children: [exec({ id: 'cell:1', status: 'failed' })],
+  it('labels a patch call site found only in a script by its tool, not as a file write', () => {
+    const script = { code: { line: 2, dynamic: true } };
+    const callSite = exec({
+      id: 'cell:1',
+      kind: 'patch',
+      name: 'apply_patch',
+      command: 'apply_patch',
+      status: 'unknown',
+      evidence: script,
     });
-    const declined = exec({ id: 'no', status: 'declined', lineNumber: 4 });
-    const timeline: TimelineEntry[] = [
-      { kind: 'user_message', id: 'u', lineNumber: 1, text: 'hi' },
-      entry('x-ok', ok),
-      entry('x-cell', failedChild),
-      entry('x-no', declined),
-      { kind: 'turn_event', id: 't', lineNumber: 5, event: 'aborted', reason: 'interrupted' },
-    ];
-    expect(filterTimeline(timeline, 'all')).toHaveLength(5);
-    expect(filterTimeline(timeline, 'executions').map((e) => e.id)).toEqual([
-      'x-ok',
-      'x-cell',
-      'x-no',
-    ]);
-    expect(filterTimeline(timeline, 'problems').map((e) => e.id)).toEqual(['x-cell', 'x-no', 't']);
+    expect(executionLabel(callSite)).toBe('apply_patch');
+    expect(executionSummary(callSite)).toBeUndefined();
+    const recorded = exec({
+      id: 'exec-1',
+      kind: 'patch',
+      name: 'apply_patch',
+      command: 'apply_patch',
+      fileWrites: [{ path: 'src/a.ts', change: 'update' }],
+      evidence: {
+        observed: { kind: 'item', recordType: 'item_completed/FileChange', lineNumber: 5 },
+        result: { kind: 'item', recordType: 'item_completed/FileChange', lineNumber: 5 },
+      },
+    });
+    expect(executionLabel(recorded)).toBe('file write');
+    expect(executionSummary(recorded)).toBe('src/a.ts');
+    // A cell's summary lists what stays in its tree; recorded writes are entries of their own.
+    const cell = exec({
+      kind: 'code_cell',
+      name: 'exec',
+      children: [callSite, recorded, exec({ id: 'cell:2', command: 'npm test' })],
+    });
+    expect(executionSummary(cell)).toBe('apply_patch · npm test');
   });
 
   it('formats relative times and short ids', () => {

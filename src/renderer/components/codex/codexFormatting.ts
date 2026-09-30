@@ -33,7 +33,6 @@ import type {
   FileWrite,
   RecordedFileDiff,
   RecordEvidence,
-  TimelineEntry,
 } from '@shared/types';
 
 export interface StatusAppearance {
@@ -160,10 +159,43 @@ export function executionLabel(exec: Execution): string {
     case 'command':
       return exec.source === 'user_shell' ? 'user shell' : exec.name;
     case 'patch':
-      return 'file write';
+      // A call site found in a cell script is not a write until Codex records one.
+      return isUnrecordedCallSite(exec) ? exec.name : 'file write';
     default:
       return exec.namespace ? `${exec.namespace}.${exec.name}` : exec.name;
   }
+}
+
+function isUnrecordedCallSite(exec: Execution): boolean {
+  return exec.evidence.code !== undefined && exec.evidence.result === undefined;
+}
+
+/**
+ * A patch execution Codex recorded a result for (a `FileChange` item, a
+ * `patch_apply_end` event, a call's output). The timeline shows each one as
+ * an entry of its own, also when it was recorded while a code cell ran.
+ */
+export function isRecordedFileWrite(exec: Execution): boolean {
+  return exec.kind === 'patch' && exec.evidence.result !== undefined;
+}
+
+/**
+ * The patch text of a patch execution's own call (`apply_patch` input or
+ * argument, or the patch argv of a shell call). Script call sites and
+ * file-change records have none.
+ */
+export function patchText(exec: Execution): string | undefined {
+  if (exec.kind !== 'patch') {
+    return undefined;
+  }
+  if (exec.source === 'custom_tool_call') {
+    return exec.input;
+  }
+  const fromArgs = exec.args?.input ?? exec.args?.patch;
+  if (typeof fromArgs === 'string') {
+    return fromArgs;
+  }
+  return exec.argv && exec.argv.length > 1 ? exec.argv[1] : undefined;
 }
 
 /** The three ways Codex has encoded commands. */
@@ -182,14 +214,20 @@ export function generationLabel(exec: Execution): string | undefined {
  */
 export function executionSummary(exec: Execution): string | undefined {
   if (exec.kind === 'patch') {
-    return fileWritesSummary(exec.fileWrites ?? []) ?? exec.command;
+    return (
+      fileWritesSummary(exec.fileWrites ?? []) ??
+      (isUnrecordedCallSite(exec) ? undefined : exec.command)
+    );
   }
   if (exec.command) {
     return exec.command;
   }
   if (exec.kind === 'code_cell') {
-    // The nested operations are what matters; list them compactly.
-    const nested = (exec.children ?? []).map((child) => child.command ?? child.name);
+    // The nested operations are what matters; list them compactly. Recorded
+    // file writes are entries of their own.
+    const nested = (exec.children ?? [])
+      .filter((child) => !isRecordedFileWrite(child))
+      .map((child) => child.command ?? child.name);
     return nested.length > 0 ? nested.join(' · ') : firstLine(exec.input);
   }
   if (exec.kind === 'code_wait') {
@@ -427,30 +465,5 @@ export function shortCallId(id: string): string {
 // Timeline filtering
 // =============================================================================
 
+/** Timeline filters (applied by `filterTimelineRows` in `codexTimelineRows.ts`) */
 export type CodexTimelineFilter = 'all' | 'executions' | 'problems';
-
-const PROBLEM_STATUSES = new Set(['failed', 'declined', 'interrupted']);
-
-function hasProblem(exec: Execution): boolean {
-  return (
-    PROBLEM_STATUSES.has(exec.status) ||
-    (exec.children ?? []).some((child) => PROBLEM_STATUSES.has(child.status))
-  );
-}
-
-export function filterTimeline(
-  timeline: readonly TimelineEntry[],
-  filter: CodexTimelineFilter
-): TimelineEntry[] {
-  switch (filter) {
-    case 'all':
-      return [...timeline];
-    case 'executions':
-      return timeline.filter((entry) => entry.kind === 'execution');
-    case 'problems':
-      return timeline.filter(
-        (entry) =>
-          entry.kind === 'turn_event' || (entry.kind === 'execution' && hasProblem(entry.execution))
-      );
-  }
-}

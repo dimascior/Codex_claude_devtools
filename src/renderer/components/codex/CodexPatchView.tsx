@@ -3,6 +3,8 @@
  * added/removed lines tinted, or a whole added or deleted file in one tint.
  */
 
+import { useState } from 'react';
+
 import { CopyButton } from '@renderer/components/common/CopyButton';
 import {
   CODE_BG,
@@ -28,6 +30,8 @@ export type PatchViewTone = 'diff' | 'added' | 'removed' | 'plain';
 interface CodexPatchViewProps {
   patch: string;
   tone?: PatchViewTone;
+  /** Show only this many lines until "Show all" is clicked */
+  previewLines?: number;
 }
 
 function lineStyle(line: string, tone: PatchViewTone): React.CSSProperties {
@@ -58,10 +62,13 @@ function lineStyle(line: string, tone: PatchViewTone): React.CSSProperties {
 export const CodexPatchView = ({
   patch,
   tone = 'diff',
+  previewLines,
 }: CodexPatchViewProps): React.JSX.Element => {
+  const [showAll, setShowAll] = useState(false);
   // A final newline ends the last line; it is not an empty line of its own.
   const lines = (patch.endsWith('\n') ? patch.slice(0, -1) : patch).split('\n');
-  const shown = lines.slice(0, MAX_LINES);
+  const previewing = !showAll && previewLines !== undefined && lines.length > previewLines;
+  const shown = lines.slice(0, previewing ? previewLines : MAX_LINES);
   return (
     <div
       className="group relative overflow-hidden rounded-md"
@@ -80,10 +87,21 @@ export const CodexPatchView = ({
             {line || ' '}
           </div>
         ))}
-        {lines.length > MAX_LINES && (
-          <div className="px-3 pt-1" style={{ color: COLOR_TEXT_MUTED }}>
-            … {lines.length - MAX_LINES} more lines
-          </div>
+        {previewing ? (
+          <button
+            type="button"
+            onClick={(): void => setShowAll(true)}
+            className="mx-3 mt-1 rounded px-1 font-sans transition-colors hover:bg-surface-raised"
+            style={{ color: COLOR_TEXT_MUTED }}
+          >
+            Show all {lines.length} lines
+          </button>
+        ) : (
+          lines.length > MAX_LINES && (
+            <div className="px-3 pt-1" style={{ color: COLOR_TEXT_MUTED }}>
+              … {lines.length - MAX_LINES} more lines
+            </div>
+          )
         )}
       </div>
     </div>

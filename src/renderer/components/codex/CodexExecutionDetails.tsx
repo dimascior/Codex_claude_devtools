@@ -21,6 +21,7 @@ import {
   durationSourceLabel,
   fileWritesNote,
   generationLabel,
+  patchText,
 } from './codexFormatting';
 import { CodexOutputBlock } from './CodexOutputBlock';
 import { CodexPatchView } from './CodexPatchView';
@@ -34,25 +35,13 @@ import type { Execution } from '@shared/types';
 
 interface CodexExecutionDetailsProps {
   execution: Execution;
+  /** Show the patch or recorded changes (off when the host card shows them already) */
+  showChanges?: boolean;
 }
 
 interface Fact {
   label: string;
   value: React.ReactNode;
-}
-
-function patchText(exec: Execution): string | undefined {
-  if (exec.kind !== 'patch') {
-    return undefined;
-  }
-  if (exec.source === 'custom_tool_call') {
-    return exec.input;
-  }
-  const fromArgs = exec.args?.input ?? exec.args?.patch;
-  if (typeof fromArgs === 'string') {
-    return fromArgs;
-  }
-  return exec.argv && exec.argv.length > 1 ? exec.argv[1] : undefined;
 }
 
 function buildFacts(exec: Execution): Fact[] {
@@ -136,6 +125,7 @@ function buildFacts(exec: Execution): Fact[] {
 
 export const CodexExecutionDetails = ({
   execution: exec,
+  showChanges = true,
 }: CodexExecutionDetailsProps): React.JSX.Element => {
   const facts = buildFacts(exec);
   const patch = patchText(exec);
@@ -187,11 +177,12 @@ export const CodexExecutionDetails = ({
           maxHeight="max-h-80"
         />
       )}
-      {patch !== undefined ? (
-        <CodexPatchView patch={patch} />
-      ) : (
-        <CodexRecordedDiffs execution={exec} />
-      )}
+      {showChanges &&
+        (patch !== undefined ? (
+          <CodexPatchView patch={patch} />
+        ) : (
+          <CodexRecordedDiffs execution={exec} />
+        ))}
       {showArgs && (
         <CodexOutputBlock
           label="Arguments"

@@ -97,7 +97,12 @@ per record, with the size of the rest), shown as "Recorded changes" in the
 details of executions that have no patch text of their own: patches run from a
 code cell, and shell calls that ran a patch. A script's `tools.apply_patch(...)`
 argument is static analysis of the cell, never the change shown for a recorded
-write.
+write. In the timeline every recorded write is an entry of its own, with its
+changes visible without expanding it: a write recorded while a code cell ran is
+placed at the line of its record, names that cell and how it was attributed
+(turn and record order), and is no longer listed in the cell's tree, which
+counts it. The domain is unchanged (the write stays in the cell's `children`);
+only the rows differ (`codexTimelineRows.ts`).
 
 Examples from real rollouts: a command blocked by a PreToolUse hook is
 `declined` (it never ran, no exit code applies); a user abort is `interrupted`;

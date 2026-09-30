@@ -51,7 +51,7 @@ test/
 │       ├── regexValidation.test.ts
 │       └── tokenizer.test.ts
 ├── renderer/
-│   ├── components/      # Component helpers (codexFormatting, codexProvenance, codexRuntime, codexRelations, renderOutput, markdownImages)
+│   ├── components/      # Component helpers (codexFormatting, codexProvenance, codexRuntime, codexRelations, codexTimelineRows, renderOutput, markdownImages)
 │   ├── hooks/           # Hook tests
 │   │   ├── navigationUtils.test.ts
 │   │   ├── useAutoScrollBottom.test.ts
