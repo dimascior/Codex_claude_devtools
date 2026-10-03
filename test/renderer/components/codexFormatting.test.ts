@@ -97,7 +97,47 @@ describe('codexFormatting', () => {
       name: 'exec',
       children: [callSite, recorded, exec({ id: 'cell:2', command: 'npm test' })],
     });
-    expect(executionSummary(cell)).toBe('apply_patch · npm test');
+    expect(executionSummary(cell)).toBe('npm test · apply_patch');
+  });
+
+  it('leads a cell summary with recorded commands, then spelled-out ones, then other operations', () => {
+    const item = {
+      kind: 'item' as const,
+      recordType: 'item_completed/CommandExecution',
+      lineNumber: 9,
+    };
+    const site = (line: number, dynamic: boolean) => ({ code: { line, dynamic } });
+    const cell = exec({
+      kind: 'code_cell',
+      name: 'exec',
+      children: [
+        exec({ id: 'c:1', kind: 'mcp', name: 'clock__curr_time', evidence: site(1, false) }),
+        exec({
+          id: 'c:2',
+          kind: 'patch',
+          name: 'apply_patch',
+          command: 'apply_patch',
+          status: 'unknown',
+          evidence: site(2, true),
+        }),
+        exec({ id: 'c:3', command: '‹command›', status: 'unknown', evidence: site(3, true) }),
+        exec({ id: 'c:4', command: 'git diff', status: 'unknown', evidence: site(4, false) }),
+        exec({
+          id: 'c:5',
+          command: 'curl.exe -sS http://127.0.0.1:47338/session',
+          evidence: {
+            code: { line: 6, dynamic: false, resolved: [{ key: 'cmd', name: 'command', line: 5 }] },
+            observed: item,
+            result: item,
+          },
+        }),
+        exec({ id: 'c:6', command: 'git diff', status: 'unknown', evidence: site(7, false) }),
+      ],
+    });
+    // A command known only at runtime (‹command›) is named by its tool.
+    expect(executionSummary(cell)).toBe(
+      'curl.exe -sS http://127.0.0.1:47338/session · git diff · clock__curr_time · apply_patch · exec_command'
+    );
   });
 
   it('formats relative times and short ids', () => {

@@ -286,6 +286,34 @@ describe('attributing exec- items to code cells', () => {
     expect(cell.children?.[1].evidence).toEqual({ code: { line: 2, dynamic: false } });
   });
 
+  it('links a recorded command to a call site whose command names a string constant', () => {
+    const records = [
+      ...start(),
+      execCall(
+        'call_a',
+        "const command = 'git status --short';\nawait tools.exec_command({ cmd: command });\nawait tools.exec_command({ cmd: other });",
+        1
+      ),
+      commandItem('exec-00000000-0000-4000-8000-000000000001', 'git status --short', 0, 2),
+      execOutput('call_a', 'Script completed\nWall time: 2.0 seconds\nOutput:\nok', 3),
+    ];
+    const cell = byId(
+      executions(normalizeCodexRollout(records, { active: false }).timeline),
+      'call_a'
+    );
+    expect(cell.children?.map((child) => [child.command, child.status])).toEqual([
+      ['git status --short', 'completed'],
+      ['‹other›', 'unknown'],
+    ]);
+    expect(cell.children?.[0].evidence).toMatchObject({
+      code: { line: 2, dynamic: false, resolved: [{ key: 'cmd', name: 'command', line: 1 }] },
+      observed: { kind: 'item', recordId: 'exec-00000000-0000-4000-8000-000000000001' },
+      callSiteLink: { method: 'content' },
+    });
+    // A name with no constant behind it stays a runtime expression.
+    expect(cell.children?.[1].evidence).toEqual({ code: { line: 3, dynamic: true } });
+  });
+
   it('does not link by content when the command text is not unique', () => {
     const records = [
       ...start(),

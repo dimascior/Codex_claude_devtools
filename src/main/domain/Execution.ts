@@ -85,6 +85,11 @@ interface CodeEvidence {
   line: number;
   /** Whether the call's arguments are only known at runtime */
   dynamic: boolean;
+  /**
+   * Command arguments taken from a `const` the script declares once with a
+   * plain string literal (still static analysis: the script's text, not a run)
+   */
+  resolved?: { key: string; name: string; line: number }[];
 }
 
 /**

@@ -108,6 +108,117 @@ describe('parseCodeCell', () => {
     expect(renderScriptValue({ $expr: 'cmd' })).toBe('‹cmd›');
   });
 
+  it('resolves command arguments from constants bound once to plain strings', () => {
+    const { calls } = parseCodeCell(
+      [
+        '// @exec: {"yield_time_ms": 1000}',
+        'const command = "curl.exe -sS http://127.0.0.1:47338/session";',
+        "const status = 'git status --short', diff = 'git diff' // both plain",
+        'const cmd = `npm test`',
+        'const script = "Get-ChildItem C:\\\\work";',
+        'async function check() {',
+        '  const local = "cargo check";',
+        '  await tools.exec_command({ cmd: local });',
+        '}',
+        'await tools.exec_command({ cmd: command, workdir: dir });',
+        'for (const x of [1]) { await tools.exec_command({ cmd: status }); }',
+        'await tools.exec_command({ cmd: diff });',
+        'await tools.exec_command({ cmd });',
+        'await tools.shell_command({ command: script });',
+      ].join('\n')
+    );
+    expect(calls).toEqual([
+      {
+        name: 'exec_command',
+        args: { cmd: 'cargo check' },
+        dynamic: false,
+        line: 7,
+        resolved: [{ key: 'cmd', name: 'local', line: 6 }],
+      },
+      {
+        name: 'exec_command',
+        // Only command arguments are resolved: `dir` stays a runtime value.
+        args: { cmd: 'curl.exe -sS http://127.0.0.1:47338/session', workdir: { $expr: 'dir' } },
+        dynamic: true,
+        line: 9,
+        resolved: [{ key: 'cmd', name: 'command', line: 1 }],
+      },
+      {
+        name: 'exec_command',
+        args: { cmd: 'git status --short' },
+        dynamic: false,
+        line: 10,
+        resolved: [{ key: 'cmd', name: 'status', line: 2 }],
+      },
+      {
+        name: 'exec_command',
+        args: { cmd: 'git diff' },
+        dynamic: false,
+        line: 11,
+        resolved: [{ key: 'cmd', name: 'diff', line: 2 }],
+      },
+      {
+        name: 'exec_command',
+        args: { cmd: 'npm test' },
+        dynamic: false,
+        line: 12,
+        resolved: [{ key: 'cmd', name: 'cmd', line: 3 }],
+      },
+      {
+        name: 'shell_command',
+        args: { command: 'Get-ChildItem C:\\work' },
+        dynamic: false,
+        line: 13,
+        resolved: [{ key: 'command', name: 'script', line: 4 }],
+      },
+    ]);
+  });
+
+  it('leaves names unresolved when they may mean another binding or value', () => {
+    const call = 'await tools.exec_command({ cmd: command });';
+    const scripts = [
+      // Not a constant, or declared more than once
+      `let command = "a";\n${call}`,
+      `var command = "a";\n${call}`,
+      `const command = "a";\n{ const command = "b"; }\n${call}`,
+      `const command = "a";\nfor (const command of list) { ${call} }`,
+      // Bound again as a parameter, function, class or catch name
+      `const command = "a";\nasync function run(command) { ${call} }`,
+      `const command = "a";\nconst run = async (command) => { ${call} };`,
+      `const command = "a";\nconst run = command => tools.exec_command({ cmd: command });`,
+      `const command = "a";\nconst o = { async run(command) { ${call} } };`,
+      `const command = "a";\nconst o = { [key](command) { ${call} } };`,
+      `const command = "a";\ntry { x(); } catch (command) { ${call} }`,
+      `const command = "a";\n{ function command() {}\n${call} }`,
+      `const command = "a";\n{ class command {}\n${call} }`,
+      `const { command } = opts;\n${call}`,
+      `const [command] = list;\n${call}`,
+      `const out = run(), command = "a";\n${call}`,
+      // Not a plain literal
+      `const command = "git " + sub;\n${call}`,
+      `const command = "git status"\n  + " --short";\n${call}`,
+      `const command = "git".concat(x);\n${call}`,
+      `const command = load("cmd.txt");\n${call}`,
+      'const command = `echo ${name}`;\n' + call,
+      // Out of the constant's block
+      `async function f() { const command = "a"; }\n${call}`,
+      // Scopes a scan cannot read
+      `const command = "a";\nwith (env) { ${call} }`,
+      `const command = "a";\neval("var command = 'b'");\n${call}`,
+      `const command = "a";\nconst re = /\\{/;\n${call}`,
+    ];
+    for (const script of scripts) {
+      expect(parseCodeCell(script).calls, script).toEqual([
+        {
+          name: 'exec_command',
+          args: { cmd: { $expr: 'command' } },
+          dynamic: true,
+          line: expect.any(Number),
+        },
+      ]);
+    }
+  });
+
   it('survives malformed scripts', () => {
     expect(parseCodeCell('await tools.exec_command({ cmd: "x" ]').calls).toHaveLength(1);
     expect(parseCodeCell('tools\nfoo(1); tools.').calls).toEqual([]);

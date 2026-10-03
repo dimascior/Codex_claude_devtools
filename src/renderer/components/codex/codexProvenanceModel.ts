@@ -207,6 +207,13 @@ export function buildProvenance(exec: Execution): ProvenanceGroup[] {
       label: 'Dynamic arguments',
       value: code.dynamic ? 'yes, known only at runtime' : 'no',
     });
+    for (const resolved of code.resolved ?? []) {
+      rows.push({
+        label: `Argument ${resolved.key}`,
+        value: `from const ${resolved.name} (script line ${resolved.line})`,
+        mono: true,
+      });
+    }
     groups.push({
       title: 'Script call site',
       description: 'Where the cell script calls this operation (static analysis).',

@@ -448,7 +448,11 @@ export class CodexExecutionParser {
       if (parsed.calls.length > 0) {
         cell.children = parsed.calls.map((call, index) =>
           this.childFromCall(cell, index, call.name, call.args, record, context, {
-            code: { line: call.line, dynamic: call.dynamic },
+            code: {
+              line: call.line,
+              dynamic: call.dynamic,
+              ...(call.resolved ? { resolved: call.resolved } : {}),
+            },
           })
         );
       }

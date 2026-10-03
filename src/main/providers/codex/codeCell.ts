@@ -14,7 +14,28 @@
  * fallback: it scans the source for `tools.<name>(<literal>)` calls without
  * executing anything. Calls in loops appear once and non-literal argument
  * parts are reported as `{ $expr: "<source>" }`.
+ *
+ * A command argument (`cmd`, `command`) that names a constant is resolved
+ * from the script when that is unambiguous: the name is declared once in the
+ * whole script, with `const`, bound to a quoted string or a template without
+ * interpolation that ends the expression, never used as a parameter or any
+ * other binding, and the call lies in the block the constant is declared in.
+ * Codex often writes
+ * `const command = "curl …"; await tools.exec_command({ cmd: command })`.
+ * The resolution is recorded with the call (`resolved`). Scripts whose scopes
+ * a scan cannot read (`with`, a direct `eval`, braces it does not see
+ * balanced) resolve nothing.
  */
+
+/** A call argument taken from a `const` declaration in the script. */
+export interface ResolvedArgument {
+  /** Argument key (`cmd`, `command`) */
+  key: string;
+  /** Constant it named */
+  name: string;
+  /** 1-based line of the declaration within the cell source */
+  line: number;
+}
 
 export interface ScriptToolCall {
   /** Tool name as written in the script (`exec_command`, `mcp__server__tool`, …) */
@@ -25,6 +46,8 @@ export interface ScriptToolCall {
   dynamic: boolean;
   /** 1-based line of the call within the cell source */
   line: number;
+  /** Arguments resolved from constants declared in the script */
+  resolved?: ResolvedArgument[];
 }
 
 export interface ParsedCodeCell {
@@ -43,6 +66,16 @@ export interface DynamicExpression {
 const PRAGMA_RE = /^[ \t]*\/\/ @exec:([^\r\n]*)\r?\n/;
 const IDENT_START_RE = /[A-Za-z_$]/;
 const IDENT_PART_RE = /[\w$]/;
+const IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/;
+const IDENTIFIERS_RE = /[A-Za-z_$][\w$]*/g;
+const LINE_END_RE = /[\n\r]/;
+
+/** Arguments that carry a command, the only ones resolved from constants. */
+const RESOLVABLE_KEYS = ['cmd', 'command'];
+/** Keywords that declare variables (`using` too: it binds a name). */
+const DECLARATION_KEYWORDS = new Set(['const', 'let', 'var', 'using']);
+/** Keywords whose parenthesized head before a block is not a parameter list. */
+const CONTROL_KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'with', 'catch']);
 
 /** Upper bound on extracted calls, to keep pathological scripts cheap. */
 const MAX_CALLS = 200;
@@ -68,12 +101,91 @@ export function parseCodeCell(input: string): ParsedCodeCell {
 
   let calls: ScriptToolCall[] = [];
   try {
-    calls = new ScriptScanner(code).findToolCalls();
+    const located = new ScriptScanner(code).findToolCalls();
+    if (located.length > 0) {
+      resolveConstArguments(located, new ScriptScanner(code).findConstBindings());
+    }
+    calls = located.map(({ call }) => call);
   } catch {
     // Static analysis is best effort; never fail the session because of it.
     calls = [];
   }
   return { pragma, code, calls };
+}
+
+/** A call found in the script, with the offset of its `tools` reference. */
+interface LocatedCall {
+  call: ScriptToolCall;
+  offset: number;
+}
+
+/**
+ * A `const` bound to a plain string literal and the source range of the block
+ * it is visible in; null when the name is not unambiguous.
+ */
+type ConstBinding = { value: string; line: number; scopeStart: number; scopeEnd: number } | null;
+
+/** A block being scanned: where it opens, the brackets open at its brace, its constants. */
+interface OpenBlock {
+  start: number;
+  nesting: number;
+  names: string[];
+}
+
+/** A declaration whose declarator list may go on past an initializer the scan skipped. */
+interface OpenDeclaration {
+  block: OpenBlock;
+  nesting: number;
+}
+
+interface SourceRange {
+  start: number;
+  end: number;
+}
+
+function containsDynamic(value: unknown): boolean {
+  if (isDynamicExpression(value)) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsDynamic);
+  }
+  if (typeof value === 'object' && value !== null) {
+    return Object.values(value).some(containsDynamic);
+  }
+  return false;
+}
+
+/**
+ * Replace a command argument that names an unambiguous string constant with
+ * the constant's text, and record where it came from.
+ */
+function resolveConstArguments(located: LocatedCall[], bindings: Map<string, ConstBinding>): void {
+  for (const { call, offset } of located) {
+    const args = call.args;
+    if (typeof args !== 'object' || args === null || Array.isArray(args)) {
+      continue;
+    }
+    const record = args as Record<string, unknown>;
+    const resolved: ResolvedArgument[] = [];
+    for (const key of RESOLVABLE_KEYS) {
+      const value = record[key];
+      if (!isDynamicExpression(value) || !IDENTIFIER_RE.test(value.$expr)) {
+        continue;
+      }
+      const binding = bindings.get(value.$expr);
+      // Outside the constant's block the name means some other binding.
+      if (!binding || offset < binding.scopeStart || offset > binding.scopeEnd) {
+        continue;
+      }
+      record[key] = binding.value;
+      resolved.push({ key, name: value.$expr, line: binding.line });
+    }
+    if (resolved.length > 0) {
+      call.resolved = resolved;
+      call.dynamic = containsDynamic(record);
+    }
+  }
 }
 
 /**
@@ -107,8 +219,8 @@ class ScriptScanner {
 
   constructor(private readonly src: string) {}
 
-  findToolCalls(): ScriptToolCall[] {
-    const calls: ScriptToolCall[] = [];
+  findToolCalls(): LocatedCall[] {
+    const calls: LocatedCall[] = [];
     const { src } = this;
 
     while (this.pos < src.length && calls.length < MAX_CALLS) {
@@ -132,7 +244,7 @@ class ScriptScanner {
         if (ident === 'tools') {
           const call = this.tryReadToolCall(start);
           if (call) {
-            calls.push(call);
+            calls.push({ call, offset: start });
           }
         }
         continue;
@@ -140,6 +252,375 @@ class ScriptScanner {
       this.pos++;
     }
     return calls;
+  }
+
+  /**
+   * Names bound by `const NAME = <plain string literal>` and nowhere else, each
+   * with the block it is visible in. A name declared twice, with `let`, `var`
+   * or `using`, in a `for` head, by destructuring, after an initializer that is
+   * not a plain literal, as a function or class name, or used as a function,
+   * arrow, method or catch parameter maps to null: a reference to it could mean
+   * another binding. A script whose scopes this scan cannot read (`with`, a
+   * direct `eval`, braces it does not see balanced, e.g. inside a regular
+   * expression) yields no bindings.
+   */
+  findConstBindings(): Map<string, ConstBinding> {
+    const bindings = new Map<string, ConstBinding>();
+    const { src } = this;
+    const blocks: OpenBlock[] = [{ start: 0, nesting: 0, names: [] }];
+    // Offsets of the open parentheses and brackets
+    const nesting: number[] = [];
+    let declaration: OpenDeclaration | undefined;
+    let lastParens: SourceRange | undefined;
+    let lastIdent: SourceRange | undefined;
+
+    while (this.pos < src.length) {
+      const ch = src[this.pos];
+      const block = blocks[blocks.length - 1];
+      if (ch === '/' && (src[this.pos + 1] === '/' || src[this.pos + 1] === '*')) {
+        this.skipComment();
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        this.readQuotedString(ch);
+        continue;
+      }
+      if (ch === '`') {
+        this.readTemplate();
+        continue;
+      }
+      if (ch === '{') {
+        this.markMethodParameters(bindings, lastParens);
+        blocks.push({ start: this.pos, nesting: nesting.length, names: [] });
+        this.pos++;
+        continue;
+      }
+      if (ch === '}') {
+        if (blocks.length === 1) {
+          return new Map(); // a brace the scan did not see open
+        }
+        blocks.pop();
+        ScriptScanner.closeBlock(bindings, block, this.pos);
+        if (nesting.length > block.nesting) {
+          nesting.length = block.nesting;
+        }
+        if (declaration?.block === block) {
+          declaration = undefined;
+        }
+        this.pos++;
+        continue;
+      }
+      if (ch === '(' || ch === '[') {
+        nesting.push(this.pos);
+        this.pos++;
+        continue;
+      }
+      if (ch === ')' || ch === ']') {
+        const open = nesting.pop();
+        if (ch === ')' && open !== undefined) {
+          lastParens = { start: open, end: this.pos };
+        }
+        if (declaration && nesting.length < declaration.nesting) {
+          declaration = undefined;
+        }
+        this.pos++;
+        continue;
+      }
+      if (ch === '=' && src[this.pos + 1] === '>') {
+        this.markArrowParameters(bindings, lastParens, lastIdent);
+        this.pos += 2;
+        continue;
+      }
+      const inDeclarationList =
+        declaration?.block === block && declaration.nesting === nesting.length;
+      if (ch === ',' && inDeclarationList) {
+        this.pos++;
+        // The next declarator; never resolvable, as the list may have ended unseen
+        if (!this.readDeclarators(false, bindings, block)) {
+          declaration = undefined;
+        }
+        continue;
+      }
+      if (ch === ';' && inDeclarationList) {
+        declaration = undefined;
+      }
+      if (IDENT_START_RE.test(ch) && !this.isIdentifierPart(this.pos - 1)) {
+        const start = this.pos;
+        const ident = this.readIdentifier();
+        lastIdent = { start, end: this.pos };
+        if (DECLARATION_KEYWORDS.has(ident)) {
+          // Inside parentheses a declaration is a `for` head, scoped to its loop.
+          const resolvable = ident === 'const' && nesting.length === block.nesting;
+          declaration = this.readDeclarators(resolvable, bindings, block)
+            ? { block, nesting: nesting.length }
+            : undefined;
+        } else if (ident === 'function' || ident === 'catch') {
+          this.markParenthesizedNames(bindings);
+        } else if (ident === 'class') {
+          this.markClassName(bindings);
+        } else if (this.opensOpaqueScope(ident)) {
+          return new Map();
+        }
+        continue;
+      }
+      this.pos++;
+    }
+    if (blocks.length !== 1) {
+      return new Map(); // a brace the scan did not see closed
+    }
+    ScriptScanner.closeBlock(bindings, blocks[0], src.length);
+    return bindings;
+  }
+
+  /** A block closed at `end`: where the scope of its constants ends. */
+  private static closeBlock(
+    bindings: Map<string, ConstBinding>,
+    block: OpenBlock,
+    end: number
+  ): void {
+    for (const name of block.names) {
+      const binding = bindings.get(name);
+      if (binding) {
+        binding.scopeEnd = end;
+      }
+    }
+  }
+
+  /** Declare a name; a second declaration makes it ambiguous. */
+  private static declare(
+    bindings: Map<string, ConstBinding>,
+    name: string,
+    binding: ConstBinding
+  ): void {
+    bindings.set(name, bindings.has(name) ? null : binding);
+  }
+
+  /** Mark every identifier in `text` as not resolvable. */
+  private static disqualify(bindings: Map<string, ConstBinding>, text: string): void {
+    for (const match of text.matchAll(IDENTIFIERS_RE)) {
+      bindings.set(match[0], null);
+    }
+  }
+
+  /**
+   * After a declaration keyword: read declarators while their initializers are
+   * plain literals; only a resolvable `const` binds. Returns true when it
+   * stopped at an initializer it does not read, after which the list may go on.
+   */
+  private readDeclarators(
+    resolvable: boolean,
+    bindings: Map<string, ConstBinding>,
+    block: OpenBlock
+  ): boolean {
+    const { src } = this;
+    for (;;) {
+      this.skipTrivia();
+      const ch = src[this.pos];
+      if (ch === '{' || ch === '[') {
+        // Destructuring declares every name in the pattern.
+        const start = this.pos;
+        this.skipBalanced(ch, ch === '{' ? '}' : ']');
+        ScriptScanner.disqualify(bindings, src.slice(start, this.pos));
+        return true;
+      }
+      if (!IDENT_START_RE.test(ch ?? '')) {
+        return false;
+      }
+      const nameStart = this.pos;
+      const name = this.readIdentifier();
+      this.skipTrivia();
+      if (src[this.pos] !== '=' || src[this.pos + 1] === '=') {
+        // No initializer (`let a, b;`), or a `for (const x of …)` head
+        ScriptScanner.declare(bindings, name, null);
+        if (src[this.pos] !== ',') {
+          return false;
+        }
+        this.pos++;
+        continue;
+      }
+      this.pos++; // the `=`
+      this.skipTrivia();
+      const value = this.readPlainLiteral();
+      if (value === undefined) {
+        ScriptScanner.declare(bindings, name, null);
+        return true;
+      }
+      if (resolvable) {
+        const line = lineOf(src, nameStart);
+        ScriptScanner.declare(bindings, name, {
+          value,
+          line,
+          scopeStart: block.start,
+          scopeEnd: src.length,
+        });
+        block.names.push(name);
+      } else {
+        ScriptScanner.declare(bindings, name, null);
+      }
+      if (src[this.pos] !== ',') {
+        return false;
+      }
+      this.pos++;
+    }
+  }
+
+  /**
+   * A quoted string, or a template without interpolation, that ends its
+   * expression; undefined otherwise (the cursor wherever reading stopped).
+   */
+  private readPlainLiteral(): string | undefined {
+    const quote = this.src[this.pos];
+    let value: string;
+    if (quote === '`') {
+      const template = this.readTemplate();
+      if (template.interpolated) {
+        return undefined;
+      }
+      value = template.value;
+    } else if (quote === '"' || quote === "'") {
+      value = this.readQuotedString(quote);
+    } else {
+      return undefined;
+    }
+    return this.atExpressionEnd() ? value : undefined;
+  }
+
+  /**
+   * Whether the expression ends here, right after a literal: at `;`, `,`, `}`
+   * or the end, or at a line end the next token cannot continue (automatic
+   * semicolon insertion: not an operator, `(`, `[`, `.` or a template). Moves
+   * past whitespace and comments.
+   */
+  private atExpressionEnd(): boolean {
+    const { src } = this;
+    const start = this.pos;
+    this.skipTrivia();
+    if (this.pos >= src.length) {
+      return true;
+    }
+    const ch = src[this.pos];
+    if (ch === ';' || ch === ',' || ch === '}') {
+      return true;
+    }
+    if (!LINE_END_RE.test(src.slice(start, this.pos))) {
+      return false;
+    }
+    if (ch === '{' || ch === '"' || ch === "'") {
+      return true;
+    }
+    if (!IDENT_START_RE.test(ch)) {
+      return false;
+    }
+    const save = this.pos;
+    const word = this.readIdentifier();
+    this.pos = save;
+    return word !== 'in' && word !== 'instanceof';
+  }
+
+  /** After `function`/`catch`: the function's own name and its parameters. */
+  private markParenthesizedNames(bindings: Map<string, ConstBinding>): void {
+    const save = this.pos;
+    this.skipTrivia();
+    if (this.src[this.pos] === '*') {
+      this.pos++;
+      this.skipTrivia();
+    }
+    if (IDENT_START_RE.test(this.src[this.pos] ?? '')) {
+      bindings.set(this.readIdentifier(), null);
+      this.skipTrivia();
+    }
+    if (this.src[this.pos] !== '(') {
+      this.pos = save;
+      return;
+    }
+    const start = this.pos;
+    this.skipBalanced('(', ')');
+    ScriptScanner.disqualify(bindings, this.src.slice(start, this.pos));
+  }
+
+  /** After `class`: the class name. */
+  private markClassName(bindings: Map<string, ConstBinding>): void {
+    this.skipTrivia();
+    if (IDENT_START_RE.test(this.src[this.pos] ?? '')) {
+      bindings.set(this.readIdentifier(), null);
+    }
+  }
+
+  /**
+   * At `{` right after `(…)`: a method definition (`name(params) {`, also with
+   * a computed name) unless a control statement's head precedes the brace. The
+   * parameters are bindings.
+   */
+  private markMethodParameters(
+    bindings: Map<string, ConstBinding>,
+    parens: SourceRange | undefined
+  ): void {
+    const { src } = this;
+    if (!parens || !this.onlyTriviaBetween(parens.end + 1, this.pos)) {
+      return;
+    }
+    let end = parens.start;
+    while (end > 0 && /\s/.test(src[end - 1])) {
+      end--;
+    }
+    let start = end;
+    while (start > 0 && IDENT_PART_RE.test(src[start - 1])) {
+      start--;
+    }
+    if (!CONTROL_KEYWORDS.has(src.slice(start, end))) {
+      ScriptScanner.disqualify(bindings, src.slice(parens.start, parens.end + 1));
+    }
+  }
+
+  /** At `=>`: the arrow's parameters, the parenthesized list or the single name before it. */
+  private markArrowParameters(
+    bindings: Map<string, ConstBinding>,
+    parens: SourceRange | undefined,
+    ident: SourceRange | undefined
+  ): void {
+    const { src } = this;
+    if (parens && this.onlyTriviaBetween(parens.end + 1, this.pos)) {
+      ScriptScanner.disqualify(bindings, src.slice(parens.start, parens.end + 1));
+    } else if (ident && this.onlyTriviaBetween(ident.end, this.pos)) {
+      bindings.set(src.slice(ident.start, ident.end), null);
+    }
+  }
+
+  /**
+   * `with (…)` or a direct `eval(…)`: names may be bound at runtime, which no
+   * scan can see. (Imported names need no rule: they live in the outermost
+   * scope, where a constant of the same name could not be declared.)
+   */
+  private opensOpaqueScope(ident: string): boolean {
+    if (ident !== 'with' && ident !== 'eval') {
+      return false;
+    }
+    const save = this.pos;
+    this.skipTrivia();
+    const next = this.src[this.pos];
+    this.pos = save;
+    return next === '(';
+  }
+
+  /** Whether only whitespace and comments lie between two offsets. */
+  private onlyTriviaBetween(start: number, end: number): boolean {
+    const { src } = this;
+    let i = start;
+    while (i < end) {
+      const ch = src[i];
+      if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
+        i++;
+      } else if (ch === '/' && src[i + 1] === '/') {
+        const lineEnd = src.indexOf('\n', i);
+        i = lineEnd === -1 ? src.length : lineEnd;
+      } else if (ch === '/' && src[i + 1] === '*') {
+        const close = src.indexOf('*/', i + 2);
+        i = close === -1 ? src.length : close + 2;
+      } else {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**

@@ -68,6 +68,23 @@ the model wrote code for that operation, not that Codex ran it. Such children
 keep the status `unknown` and the "script only" badge unless an independent
 provider record is attributed to them.
 
+A call site's arguments are what the script spells out: literals, with parts
+known only at runtime shown as `‹expr›`. A command argument (`cmd`, `command`)
+that names a constant is replaced by the constant's text when the script binds
+it unambiguously: declared once in the whole script, with `const`, to a quoted
+string or a template without interpolation that ends its expression (automatic
+semicolon insertion included), never bound again as a parameter, function,
+class or catch name, and the call lies in the constant's block. The resolution
+is recorded (`evidence.code.resolved`: argument, constant, script line) and
+shown in the provenance. It is still static analysis, but it lets the call
+site link by `content` to the command Codex recorded. Scripts whose scopes a
+scan cannot read (`with`, a direct `eval`, braces it does not see balanced, as
+inside a regular expression) resolve nothing, and values built at runtime
+(concatenation, interpolation, `load(...)`) stay `‹expr›`. A cell's one-line
+summary lists the commands Codex recorded first, then the commands its script
+spells out, then its other operations by tool name; a command known only at
+runtime is named by its tool.
+
 Relations between records are labelled by how they were established:
 `explicit_id` (records share an identifier), `turn_window` (same turn, recorded
 while exactly one code cell of that turn was running; no identifier links them),

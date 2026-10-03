@@ -209,6 +209,9 @@ export function generationLabel(exec: Execution): string | undefined {
   return exec.generation ? GENERATION_LABELS[exec.generation] : undefined;
 }
 
+/** A script value known only at runtime, as static analysis renders it. */
+const PLACEHOLDER_RE = /^‹[^›]*›$/;
+
 /**
  * One-line summary for executions without a command.
  */
@@ -223,12 +226,22 @@ export function executionSummary(exec: Execution): string | undefined {
     return exec.command;
   }
   if (exec.kind === 'code_cell') {
-    // The nested operations are what matters; list them compactly. Recorded
-    // file writes are entries of their own.
-    const nested = (exec.children ?? [])
-      .filter((child) => !isRecordedFileWrite(child))
-      .map((child) => child.command ?? child.name);
-    return nested.length > 0 ? nested.join(' · ') : firstLine(exec.input);
+    // The nested operations are what matters, most telling first: commands
+    // Codex recorded running, then commands the script spells out, then the
+    // other operations by name. A placeholder (‹expr›, known only at runtime)
+    // says nothing here. Recorded file writes are entries of their own.
+    const nested = (exec.children ?? []).filter((child) => !isRecordedFileWrite(child));
+    const spelled = (child: Execution): string | undefined =>
+      child.kind === 'command' && child.command && !PLACEHOLDER_RE.test(child.command)
+        ? child.command
+        : undefined;
+    const commands = [
+      ...nested.filter((child) => child.evidence.result !== undefined),
+      ...nested.filter((child) => child.evidence.result === undefined),
+    ].flatMap((child) => spelled(child) ?? []);
+    const names = nested.filter((child) => !spelled(child)).map((child) => child.name);
+    const parts = [...new Set([...commands, ...names])];
+    return parts.length > 0 ? parts.join(' · ') : firstLine(exec.input);
   }
   if (exec.kind === 'code_wait') {
     return exec.cellId ? `cell ${exec.cellId}` : undefined;
