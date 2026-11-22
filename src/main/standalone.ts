@@ -2,25 +2,34 @@
  * Standalone (non-Electron) entry point for claude-devtools.
  *
  * Runs the HTTP server + API without Electron, suitable for Docker
- * or any headless/remote environment. The renderer is served as
+ * or any headless environment. The renderer is served as
  * static files over HTTP.
  *
+ * Local-only by default: it binds to 127.0.0.1 and answers only loopback Host
+ * names. Serving other machines is an explicit choice (HOST, ALLOWED_HOSTS) and
+ * has no authentication.
+ *
  * Environment variables:
- * - HOST: Bind address (default '0.0.0.0')
+ * - HOST: Bind address (default '127.0.0.1'; Docker images set '0.0.0.0')
+ * - ALLOWED_HOSTS: Comma-separated host names to answer besides the loopback
+ *   names (default none)
  * - PORT: Listen port (default 3456)
  * - CLAUDE_ROOT: Path to .claude directory (default ~/.claude)
- * - CORS_ORIGIN: CORS origin policy (default '*')
+ * - CODEX_HOME: Path to the Codex home directory (default ~/.codex)
+ * - CORS_ORIGIN: CORS origin policy (default: localhost origins only)
  */
 
 import { createLogger } from '@shared/utils/logger';
 import * as path from 'path';
 
+import { resolveStandaloneNetworkConfig } from './http/hostPolicy';
 import { HttpServer } from './services/infrastructure/HttpServer';
 import {
   getProjectsBasePath,
   getTodosBasePath,
   setClaudeBasePathOverride,
 } from './utils/pathDecoder';
+import { CodexSessionService } from './providers';
 import {
   ConfigManager,
   LocalFileSystemProvider,
@@ -38,14 +47,9 @@ const logger = createLogger('Standalone');
 // Configuration
 // =============================================================================
 
-const HOST = process.env.HOST ?? '0.0.0.0';
+const { host: HOST, allowedHosts: ALLOWED_HOSTS } = resolveStandaloneNetworkConfig(process.env);
 const PORT = parseInt(process.env.PORT ?? '3456', 10);
 const CLAUDE_ROOT = process.env.CLAUDE_ROOT;
-
-// Default CORS to allow all in standalone mode (Docker isolation replaces CORS)
-if (!process.env.CORS_ORIGIN) {
-  process.env.CORS_ORIGIN = '*';
-}
 
 // =============================================================================
 // Stub services (Electron-only features unavailable in standalone)
@@ -87,6 +91,7 @@ const sshConnectionManagerStub = {
 let localContext: ServiceContext;
 let notificationManager: NotificationManager;
 let httpServer: HttpServer;
+let codexSessionService: CodexSessionService;
 
 // =============================================================================
 // Lifecycle
@@ -142,6 +147,14 @@ async function start(): Promise<void> {
     httpServer.broadcast('memory:changed', event);
   });
 
+  // Codex sessions ($CODEX_HOME/sessions)
+  codexSessionService = new CodexSessionService();
+  codexSessionService.on('session-change', (event: unknown) => {
+    httpServer.broadcast('codex:session-change', event);
+  });
+  codexSessionService.start();
+  logger.info(`Codex sessions directory: ${codexSessionService.getSessionsDir()}`);
+
   // Forward notification events to SSE
   notificationManager.on('notification-new', (notification: unknown) => {
     httpServer.broadcast('notification:new', notification);
@@ -163,13 +176,16 @@ async function start(): Promise<void> {
     memoryReader: localContext.memoryReader,
     updaterService: updaterServiceStub,
     sshConnectionManager: sshConnectionManagerStub,
+    codexSessionService,
   };
 
   // No-op mode switch handler (no SSH in standalone)
   const modeSwitchHandler = async (): Promise<void> => {};
 
   // Start the server
-  const port = await httpServer.start(services, modeSwitchHandler, PORT, HOST);
+  const port = await httpServer.start(services, modeSwitchHandler, PORT, HOST, {
+    allowedHosts: ALLOWED_HOSTS,
+  });
   logger.info(`Standalone server running at http://${HOST}:${port}`);
   // Always print the URL regardless of log level so users know where to connect
   const displayHost = HOST === '0.0.0.0' || HOST === '::' ? 'localhost' : HOST;
@@ -186,6 +202,10 @@ async function shutdown(): Promise<void> {
 
   if (localContext) {
     localContext.dispose();
+  }
+
+  if (codexSessionService) {
+    codexSessionService.dispose();
   }
 
   logger.info('Shutdown complete');

@@ -48,3 +48,5 @@ claude-dev.tools/*
 
 eslint-fix/
 remotion/*
+# Local Codex evidence scratch area (sanitized transcripts, never committed)
+real-data/

@@ -3,6 +3,7 @@
  * Contains the combined AppState interface and shared types used across slices.
  */
 
+import type { CodexSlice } from './slices/codexSlice';
 import type { ConfigSlice } from './slices/configSlice';
 import type { ConnectionSlice } from './slices/connectionSlice';
 import type { ContextSlice } from './slices/contextSlice';
@@ -92,4 +93,5 @@ export type AppState = ProjectSlice &
   ConnectionSlice &
   ContextSlice &
   UpdateSlice &
-  MemorySlice;
+  MemorySlice &
+  CodexSlice;

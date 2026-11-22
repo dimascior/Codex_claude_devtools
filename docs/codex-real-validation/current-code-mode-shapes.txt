@@ -1,0 +1,38 @@
+REAL CODEX CURRENT ROLLOUT STRUCTURE
+Generated from sanitized structural transcript
+
+=== RECORD / PAYLOAD COUNTS ===
+   26660 event_msg/item_completed
+   12217 response_item/reasoning
+    6371 event_msg/token_count
+    6354 token_usage_record
+    6111 response_item/custom_tool_call
+    6110 response_item/custom_tool_call_output
+    5887 response_item/message
+     179 response_item/function_call_output
+     179 response_item/function_call
+      68 event_msg/thread_settings_applied
+      67 turn_context
+      46 world_state
+      40 compacted
+      27 event_msg/task_started
+      24 event_msg/task_complete
+       2 event_msg/turn_aborted
+       1 session_meta
+
+=== item_completed ITEM TYPES ===
+   18049 Reasoning
+    5824 AgentMessage
+    2430 FileChange
+     141 CommandExecution
+     108 McpToolCall
+      40 UserMessage
+      40 ContextCompaction
+      20 Extension
+       8 WebSearch
+
+=== NESTED CODE-MODE PASSTHROUGH ===
+   lines containing executed_tool_calls: 0
+   lines containing cell_id: 0
+   distinct custom_tool_call names: exec
+   distinct function_call names: js, request_user_input_async, sleep, wait

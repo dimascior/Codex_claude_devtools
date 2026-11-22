@@ -5,6 +5,7 @@
 import { api } from '@renderer/api';
 import { create } from 'zustand';
 
+import { createCodexSlice } from './slices/codexSlice';
 import { createConfigSlice } from './slices/configSlice';
 import { createConnectionSlice } from './slices/connectionSlice';
 import { createContextSlice } from './slices/contextSlice';
@@ -47,6 +48,7 @@ export const useStore = create<AppState>()((...args) => ({
   ...createContextSlice(...args),
   ...createUpdateSlice(...args),
   ...createMemorySlice(...args),
+  ...createCodexSlice(...args),
 }));
 
 // =============================================================================
@@ -67,6 +69,9 @@ export function initializeNotificationListeners(): () => void {
   const pendingProjectRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const SESSION_REFRESH_DEBOUNCE_MS = 150;
   const PROJECT_REFRESH_DEBOUNCE_MS = 300;
+  const CODEX_LIST_REFRESH_DEBOUNCE_MS = 400;
+  const CODEX_DETAIL_REFRESH_THROTTLE_MS = 250;
+  const CODEX_RELATIONS_REFRESH_THROTTLE_MS = 1000;
   const getBaseProjectId = (projectId: string | null | undefined): string | null => {
     if (!projectId) return null;
     const separatorIndex = projectId.indexOf('::');
@@ -395,6 +400,46 @@ export function initializeNotificationListeners(): () => void {
     }
   }
 
+  // Codex rollouts: refresh the listing (debounced) and the selected session
+  // (throttled, so a continuously appended live rollout keeps updating). The
+  // selected session's relations depend on other rollouts too (a spawned
+  // child's file appearing or being deleted), so any change refreshes them
+  // (throttled, after the detail refresh).
+  let codexListTimer: ReturnType<typeof setTimeout> | null = null;
+  let codexDetailTimer: ReturnType<typeof setTimeout> | null = null;
+  let codexRelationsTimer: ReturnType<typeof setTimeout> | null = null;
+  if (api.codex?.onSessionChange) {
+    const cleanup = api.codex.onSessionChange((event) => {
+      const state = useStore.getState();
+      // Nothing to update until the Codex view has been opened.
+      if (state.codexSessions === null) return;
+
+      if (codexListTimer) clearTimeout(codexListTimer);
+      codexListTimer = setTimeout(() => {
+        codexListTimer = null;
+        void useStore.getState().fetchCodexSessions();
+      }, CODEX_LIST_REFRESH_DEBOUNCE_MS);
+
+      const isSelected = !event.sessionId || event.sessionId === state.codexSelectedSessionId;
+      if (isSelected && !codexDetailTimer) {
+        codexDetailTimer = setTimeout(() => {
+          codexDetailTimer = null;
+          void useStore.getState().refreshCodexDetail();
+        }, CODEX_DETAIL_REFRESH_THROTTLE_MS);
+      }
+
+      if (state.codexSelectedSessionId && !codexRelationsTimer) {
+        codexRelationsTimer = setTimeout(() => {
+          codexRelationsTimer = null;
+          void useStore.getState().refreshCodexRelations();
+        }, CODEX_RELATIONS_REFRESH_THROTTLE_MS);
+      }
+    });
+    if (typeof cleanup === 'function') {
+      cleanupFns.push(cleanup);
+    }
+  }
+
   // Listen for context changes from main process (e.g., SSH disconnect)
   if (api.context?.onChanged) {
     const cleanup = api.context.onChanged((_event: unknown, data: unknown) => {
@@ -421,6 +466,9 @@ export function initializeNotificationListeners(): () => void {
       clearTimeout(timer);
     }
     pendingProjectRefreshTimers.clear();
+    if (codexListTimer) clearTimeout(codexListTimer);
+    if (codexDetailTimer) clearTimeout(codexDetailTimer);
+    if (codexRelationsTimer) clearTimeout(codexRelationsTimer);
     cleanupFns.forEach((fn) => fn());
   };
 }

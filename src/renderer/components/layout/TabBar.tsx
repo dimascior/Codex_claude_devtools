@@ -15,7 +15,7 @@ import { isElectronMode } from '@renderer/api';
 import { HEADER_ROW1_HEIGHT } from '@renderer/constants/layout';
 import { useStore } from '@renderer/store';
 import { formatShortcut } from '@renderer/utils/stringUtils';
-import { Bell, PanelLeft, Plus, RefreshCw } from 'lucide-react';
+import { Bell, PanelLeft, Plus, RefreshCw, SquareTerminal } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { MoreMenu } from './MoreMenu';
@@ -43,6 +43,7 @@ export const TabBar = ({ paneId }: TabBarProps): React.JSX.Element => {
     fetchSessions,
     unreadCount,
     openNotificationsTab,
+    openCodexTab,
     sidebarCollapsed,
     toggleSidebar,
     splitPane,
@@ -68,6 +69,7 @@ export const TabBar = ({ paneId }: TabBarProps): React.JSX.Element => {
       fetchSessions: s.fetchSessions,
       unreadCount: s.unreadCount,
       openNotificationsTab: s.openNotificationsTab,
+      openCodexTab: s.openCodexTab,
       sidebarCollapsed: s.sidebarCollapsed,
       toggleSidebar: s.toggleSidebar,
       splitPane: s.splitPane,
@@ -100,6 +102,7 @@ export const TabBar = ({ paneId }: TabBarProps): React.JSX.Element => {
   const [refreshHover, setRefreshHover] = useState(false);
   const [newTabHover, setNewTabHover] = useState(false);
   const [notificationsHover, setNotificationsHover] = useState(false);
+  const [codexHover, setCodexHover] = useState(false);
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(
@@ -379,6 +382,24 @@ export const TabBar = ({ paneId }: TabBarProps): React.JSX.Element => {
           title="New tab (Dashboard)"
         >
           <Plus className="size-4" />
+        </button>
+
+        {/* Codex sessions */}
+        <button
+          onClick={openCodexTab}
+          onMouseEnter={() => setCodexHover(true)}
+          onMouseLeave={() => setCodexHover(false)}
+          className="rounded-md p-2 transition-colors"
+          style={{
+            color:
+              codexHover || activeTab?.type === 'codex'
+                ? 'var(--color-text)'
+                : 'var(--color-text-muted)',
+            backgroundColor: codexHover ? 'var(--color-surface-raised)' : 'transparent',
+          }}
+          title="Codex sessions"
+        >
+          <SquareTerminal className="size-4" />
         </button>
 
         {/* Notifications bell icon */}

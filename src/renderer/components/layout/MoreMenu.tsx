@@ -1,7 +1,7 @@
 /**
  * MoreMenu - Dropdown menu behind a "..." icon for less-frequent toolbar actions.
  *
- * Groups: Search, Export (session-only), Settings.
+ * Groups: Search + Codex sessions, Export (session-only), Settings.
  * Closes on outside click or Escape.
  */
 
@@ -11,7 +11,15 @@ import { api } from '@renderer/api';
 import { useStore } from '@renderer/store';
 import { triggerDownload } from '@renderer/utils/sessionExporter';
 import { formatShortcut } from '@renderer/utils/stringUtils';
-import { Braces, FileText, MoreHorizontal, Search, Settings, Type } from 'lucide-react';
+import {
+  Braces,
+  FileText,
+  MoreHorizontal,
+  Search,
+  Settings,
+  SquareTerminal,
+  Type,
+} from 'lucide-react';
 
 import type { Tab } from '@renderer/types/tabs';
 import type { ExportFormat } from '@renderer/utils/sessionExporter';
@@ -42,6 +50,7 @@ export const MoreMenu = ({
 
   const openCommandPalette = useStore((s) => s.openCommandPalette);
   const openSettingsTab = useStore((s) => s.openSettingsTab);
+  const openCodexTab = useStore((s) => s.openCodexTab);
 
   // Close on outside click
   useEffect(() => {
@@ -105,6 +114,15 @@ export const MoreMenu = ({
       shortcut: formatShortcut('K'),
       onClick: () => {
         openCommandPalette();
+        setIsOpen(false);
+      },
+    },
+    {
+      id: 'codex',
+      label: 'Codex Sessions',
+      icon: SquareTerminal,
+      onClick: () => {
+        openCodexTab();
         setIsOpen(false);
       },
     },

@@ -39,6 +39,33 @@ components/
 │   ├── UserChatGroup.tsx    # User message display
 │   ├── markdownComponents.tsx # Custom markdown renderers
 │   └── searchHighlightUtils.ts # Search highlight utilities
+├── codex/                   # Codex rollout viewer (tab type 'codex')
+│   ├── CodexView            # Session list + timeline layout, periodic refresh
+│   ├── CodexSessionList     # Rollouts grouped by project, live dot, follow-live toggle
+│   ├── CodexSessionHeader   # Session badges, "Spawned by" line, runtime line, execution stats, tokens, timeline filter
+│   ├── CodexRuntimeSummary  # Header runtime: latest effective turn state (model, effort, approval, sandbox, profile) + "more"
+│   ├── CodexTimeline        # Chronological rows (entries + separate file writes), auto-scroll while following live, TurnRuntimeContext + CodexRelationsContext providers, focus on a spawn call
+│   ├── codexTimelineRows.ts # Timeline rows: recorded file writes as rows of their own (lifted out of cells, placed by record line), row filters
+│   ├── CodexFileWriteCard   # One file write: files and changes shown inline (preview, "Show all"), the cell or execution it was recorded for, details on click
+│   ├── CodexSettingsChangeItem # Settings change: recorded (solid) vs derived turn_context_diff (dashed), previous → next
+│   ├── CodexExecutionCard   # One execution (command, code cell, tool; file writes use CodexFileWriteCard); spawn cards show their child session
+│   ├── CodexExecutionDetails # Facts grid (incl. files written, Codex tags), provenance, session relation, effective runtime, argv, script, patch or recorded changes, args, output
+│   ├── CodexRecordedDiffs   # Per-file change text of the file-change record (unified diff / file content), with omitted size
+│   ├── CodexChildSessionLink # Spawn card: child session + "Open child" (resolved relations only), else a status line
+│   ├── CodexParentSessionLink # Subagent header: "Spawned by" + "Open parent" (opens the parent at its spawn call), evidence toggle
+│   ├── CodexRelationDetails # Session relation evidence: explicit provider ID chain, spawn call, started record, threads, lines, candidates
+│   ├── codexRelationFormatting.ts # Relation names, status lines and evidence rows
+│   ├── codexRelationsContext.ts # CodexRelationsContext: spawned-child relations by spawn execution id, openRelated
+│   ├── CodexProvenance      # Domain id, provider records (type, provider id, line), script call site, correlation methods
+│   ├── codexProvenanceModel.ts # Provenance groups and evidence class, built from Execution.evidence only
+│   ├── CodexRuntimeDetails  # "Effective runtime" of the execution's turn (via turnId), apart from provenance
+│   ├── codexRuntimeContext.ts # TurnRuntimeContext: turn states by turn id
+│   ├── codexRuntimeFormatting.ts # Setting labels/values, current runtime, settings-change wording
+│   ├── CodexNestedExecutions # Code-cell children as a tree, without the recorded file writes (counted, shown as their own entries)
+│   ├── CodexCommandActions  # Codex's recorded read / list / search tags (parsed_cmd)
+│   ├── CodexStatusBadge / CodexOutputBlock / CodexPatchView
+│   ├── CodexMessageItem / CodexReasoningItem / CodexEventItem
+│   └── codexFormatting.ts   # Status labels, icons, summaries, patch text, recorded-write test
 ├── common/                  # Shared UI primitives
 │   ├── CopyButton           # Copy to clipboard button
 │   ├── CopyablePath         # Clickable, copyable file path

@@ -7,6 +7,7 @@ import { PROSE_BODY } from '@renderer/constants/cssVariables';
 const MermaidViewer = React.lazy(() =>
   import('./viewers/MermaidViewer').then((m) => ({ default: m.MermaidViewer }))
 );
+import { MarkdownImage } from './MarkdownImage';
 import { highlightSearchInChildren, type SearchContext } from './searchHighlightUtils';
 
 import type { Components } from 'react-markdown';
@@ -265,6 +266,9 @@ export function createMarkdownComponents(searchCtx: SearchContext | null): Compo
 
     // Horizontal rule
     hr: () => <hr className="my-4" style={{ borderColor: 'var(--prose-table-border)' }} />,
+
+    // Images are never loaded from session content
+    img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
   };
 }
 
